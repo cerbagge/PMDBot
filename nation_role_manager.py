@@ -166,15 +166,18 @@ nation_role_manager = NationRoleManager()
 async def create_nation_role_if_needed(guild, nation_name: str) -> Optional[discord.Role]:
     """
     국가 역할이 없으면 자동으로 생성하고 JSON에 저장
-    
+    AUTO_ASSIGN_NATION_ROLES 설정에 따라 자동 생성 여부 결정
+
     Args:
         guild: Discord 길드 객체
         nation_name: 국가 이름
-    
+
     Returns:
-        Discord Role 객체 (생성되거나 기존 역할)
+        Discord Role 객체 (생성되거나 기존 역할), AUTO_ASSIGN_NATION_ROLES=False면 None
     """
     try:
+        from config import config
+
         # 기존 매핑 확인
         role_id = nation_role_manager.get_nation_role_id(nation_name)
         if role_id:
@@ -188,33 +191,38 @@ async def create_nation_role_if_needed(guild, nation_name: str) -> Optional[disc
                 print(f"  ⚠️ 매핑된 역할이 존재하지 않음: {nation_name} (ID: {role_id})")
                 # 잘못된 매핑 제거
                 nation_role_manager.remove_nation_role(nation_name)
-        
+
         # 길드에서 동일한 이름의 역할 찾기
         for role in guild.roles:
             if role.name == nation_name:
                 print(f"  🔗 기존 역할을 매핑에 추가: {nation_name}")
                 nation_role_manager.add_nation_role(nation_name, role.id, guild.id, auto_created=False)
                 return role
-        
+
+        # AUTO_ASSIGN_NATION_ROLES 설정 확인
+        if not config.AUTO_ASSIGN_NATION_ROLES:
+            print(f"  ⚙️ AUTO_ASSIGN_NATION_ROLES=False: 국가 역할 자동 생성 비활성화됨 ({nation_name})")
+            return None
+
         # 새 역할 생성
         print(f"  🔧 새 국가 역할 생성 중: {nation_name}")
-        
+
         # 국가별 색상 설정
         role_color = get_nation_color(nation_name)
-        
+
         # 역할 생성
         new_role = await guild.create_role(
             name=nation_name,
             color=role_color,
             reason=f"자동 생성: {nation_name} 국가 역할"
         )
-        
+
         # JSON에 매핑 저장
         nation_role_manager.add_nation_role(nation_name, new_role.id, guild.id, auto_created=True)
-        
+
         print(f"  ✅ 국가 역할 생성 및 매핑 저장 완료: {nation_name} (ID: {new_role.id})")
         return new_role
-        
+
     except discord.Forbidden:
         print(f"  ❌ 역할 생성 권한 없음: {nation_name}")
         return None

@@ -58,6 +58,7 @@ class Config:
         self.BASE_NATION = self._get_env("BASE_NATION", "Red_Mafia")  # Legacy: 이름 기반
         self.BASE_NATION_UUID = self._get_env("BASE_NATION_UUID", None)  # UUID 기반 (우선)
         self.REMOVE_ROLE_IF_WRONG_NATION = self._get_env_bool("REMOVE_ROLE_IF_WRONG_NATION", True)
+        self.AUTO_ASSIGN_NATION_ROLES = self._get_env_bool("AUTO_ASSIGN_NATION_ROLES", False)
         
         # 필수 항목 검증
         self._validate_config()
@@ -117,6 +118,7 @@ class Config:
             ("BASE_NATION", self.BASE_NATION),
             ("BASE_NATION_UUID", self.BASE_NATION_UUID or "❌ 미설정 (이름으로 fallback)"),
             ("REMOVE_ROLE_IF_WRONG_NATION", self.REMOVE_ROLE_IF_WRONG_NATION),
+            ("AUTO_ASSIGN_NATION_ROLES", self.AUTO_ASSIGN_NATION_ROLES),
         ]
 
         for name, value in config_items:
