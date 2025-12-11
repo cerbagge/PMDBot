@@ -2510,12 +2510,17 @@ class SlashCommands(commands.Cog):
                 user_country = member_data["members"][user_id_str]
                 await self.check_and_assign_role(member, user_country)
 
-            # 국가별 역할 부여 (기존 로직)
+            # 동맹 국가 확인
+            is_alliance_nation = False
+            if ALLIANCE_ENABLED and alliance_manager:
+                is_alliance_nation = alliance_manager.is_alliance_name(nation)
+
+            # 국가별 역할 부여 (동맹 로직 추가)
             role_added = None
             role_removed = None
-            
+
             if nation == BASE_NATION:
-                # 국민인 경우
+                # 기본 국가 국민 - 조직원 역할 부여
                 if SUCCESS_ROLE_ID != 0:
                     success_role = guild.get_role(SUCCESS_ROLE_ID)
                     if success_role:
@@ -2524,14 +2529,14 @@ class SlashCommands(commands.Cog):
                                 await member.add_roles(success_role)
                                 role_added = success_role.name
                                 changes.append(f"• **{success_role.name}** 역할 추가됨")
-                                print(f"  ✅ 국민 역할 부여: {success_role.name}")
+                                print(f"  ✅ 조직원 역할 부여: {success_role.name}")
                             except Exception as e:
-                                changes.append(f"• ⚠️ 국민 역할 부여 실패: {str(e)[:50]}")
-                                print(f"  ⚠️ 국민 역할 부여 실패: {e}")
+                                changes.append(f"• ⚠️ 조직원 역할 부여 실패: {str(e)[:50]}")
+                                print(f"  ⚠️ 조직원 역할 부여 실패: {e}")
                         else:
-                            print(f"  ℹ️ 이미 국민 역할 보유: {success_role.name}")
-                
-                # 비국민 역할 제거
+                            print(f"  ℹ️ 이미 조직원 역할 보유: {success_role.name}")
+
+                # 외국인 역할 제거
                 if SUCCESS_ROLE_ID_OUT != 0:
                     out_role = guild.get_role(SUCCESS_ROLE_ID_OUT)
                     if out_role and out_role in member.roles:
@@ -2539,20 +2544,57 @@ class SlashCommands(commands.Cog):
                             await member.remove_roles(out_role)
                             role_removed = out_role.name
                             changes.append(f"• **{out_role.name}** 역할 제거됨")
-                            print(f"  ✅ 비국민 역할 제거: {out_role.name}")
+                            print(f"  ✅ 외국인 역할 제거: {out_role.name}")
                         except Exception as e:
-                            changes.append(f"• ⚠️ 비국민 역할 제거 실패: {str(e)[:50]}")
-                            print(f"  ⚠️ 비국민 역할 제거 실패: {e}")
-                
-                # 성공 메시지 (국민)
+                            changes.append(f"• ⚠️ 외국인 역할 제거 실패: {str(e)[:50]}")
+                            print(f"  ⚠️ 외국인 역할 제거 실패: {e}")
+
+                # 성공 메시지 (기본 국가)
                 embed = discord.Embed(
                     title="✅ 국민 확인 완료",
                     description=f"**{BASE_NATION}** 국민으로 확인되었습니다!",
                     color=0x00ff00
                 )
-                
+
+            elif is_alliance_nation:
+                # 동맹 국가 국민 - 외국인 역할 부여
+                if SUCCESS_ROLE_ID_OUT != 0:
+                    out_role = guild.get_role(SUCCESS_ROLE_ID_OUT)
+                    if out_role:
+                        if out_role not in member.roles:
+                            try:
+                                await member.add_roles(out_role)
+                                role_added = out_role.name
+                                changes.append(f"• **{out_role.name}** 역할 추가됨 (동맹)")
+                                print(f"  ✅ 외국인 역할 부여 (동맹): {out_role.name}")
+                            except Exception as e:
+                                changes.append(f"• ⚠️ 외국인 역할 부여 실패: {str(e)[:50]}")
+                                print(f"  ⚠️ 외국인 역할 부여 실패: {e}")
+                        else:
+                            print(f"  ℹ️ 이미 외국인 역할 보유: {out_role.name}")
+
+                # 조직원 역할 제거
+                if SUCCESS_ROLE_ID != 0:
+                    success_role = guild.get_role(SUCCESS_ROLE_ID)
+                    if success_role and success_role in member.roles:
+                        try:
+                            await member.remove_roles(success_role)
+                            role_removed = success_role.name
+                            changes.append(f"• **{success_role.name}** 역할 제거됨")
+                            print(f"  ✅ 조직원 역할 제거: {success_role.name}")
+                        except Exception as e:
+                            changes.append(f"• ⚠️ 조직원 역할 제거 실패: {str(e)[:50]}")
+                            print(f"  ⚠️ 조직원 역할 제거 실패: {e}")
+
+                # 성공 메시지 (동맹 국가)
+                embed = discord.Embed(
+                    title="✅ 동맹 국가 국민 확인 완료",
+                    description=f"**{nation}** 동맹 국가 국민으로 확인되었습니다!",
+                    color=0x00ff00
+                )
+
             else:
-                # 비국민인 경우
+                # 외국인 - 외국인 역할 부여
                 if SUCCESS_ROLE_ID_OUT != 0:
                     out_role = guild.get_role(SUCCESS_ROLE_ID_OUT)
                     if out_role:
@@ -2561,14 +2603,14 @@ class SlashCommands(commands.Cog):
                                 await member.add_roles(out_role)
                                 role_added = out_role.name
                                 changes.append(f"• **{out_role.name}** 역할 추가됨")
-                                print(f"  ✅ 비국민 역할 부여: {out_role.name}")
+                                print(f"  ✅ 외국인 역할 부여: {out_role.name}")
                             except Exception as e:
-                                changes.append(f"• ⚠️ 비국민 역할 부여 실패: {str(e)[:50]}")
-                                print(f"  ⚠️ 비국민 역할 부여 실패: {e}")
+                                changes.append(f"• ⚠️ 외국인 역할 부여 실패: {str(e)[:50]}")
+                                print(f"  ⚠️ 외국인 역할 부여 실패: {e}")
                         else:
-                            print(f"  ℹ️ 이미 비국민 역할 보유: {out_role.name}")
-                
-                # 국민 역할 제거
+                            print(f"  ℹ️ 이미 외국인 역할 보유: {out_role.name}")
+
+                # 조직원 역할 제거
                 if SUCCESS_ROLE_ID != 0:
                     success_role = guild.get_role(SUCCESS_ROLE_ID)
                     if success_role and success_role in member.roles:
@@ -2576,12 +2618,12 @@ class SlashCommands(commands.Cog):
                             await member.remove_roles(success_role)
                             role_removed = success_role.name
                             changes.append(f"• **{success_role.name}** 역할 제거됨")
-                            print(f"  ✅ 국민 역할 제거: {success_role.name}")
+                            print(f"  ✅ 조직원 역할 제거: {success_role.name}")
                         except Exception as e:
-                            changes.append(f"• ⚠️ 국민 역할 제거 실패: {str(e)[:50]}")
-                            print(f"  ⚠️ 국민 역할 제거 실패: {e}")
-                
-                # 성공 메시지 (비국민)
+                            changes.append(f"• ⚠️ 조직원 역할 제거 실패: {str(e)[:50]}")
+                            print(f"  ⚠️ 조직원 역할 제거 실패: {e}")
+
+                # 성공 메시지 (외국인)
                 embed = discord.Embed(
                     title="⚠️ 다른 국가 소속",
                     description=f"**{nation}** 국가에 소속되어 있습니다.",

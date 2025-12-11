@@ -244,14 +244,11 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
         else:
             print(f"  🔍 이름 기반 국가 확인: {nation} (UUID 없음)")
         
-        if is_friendly:
-            # 우호 국가 (기본 국가 또는 동맹 국가)
-            if is_base_nation:
-                print(f"  🏠 {base_nation} 기본 국가 국민 확인됨")
-            else:
-                print(f"  🤝 {nation} 동맹 국가 국민 확인됨")
-            
-            # 국민 역할 부여
+        if is_base_nation:
+            # 기본 국가(BASE_NATION) 국민 - 조직원 역할 부여
+            print(f"  🏠 {base_nation} 기본 국가 국민 확인됨")
+
+            # 조직원 역할(SUCCESS_ROLE_ID) 부여
             if SUCCESS_ROLE_ID != 0:
                 success_role = guild.get_role(SUCCESS_ROLE_ID)
                 if success_role:
@@ -259,15 +256,15 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
                         try:
                             await member.add_roles(success_role)
                             changes.append(f"• **{success_role.name}** 역할 추가됨")
-                            print(f"  ✅ 국민 역할 부여: {success_role.name}")
+                            print(f"  ✅ 조직원 역할 부여: {success_role.name}")
                         except Exception as e:
-                            changes.append(f"• ⚠️ 국민 역할 부여 실패: {str(e)[:50]}")
-                            print(f"  ⚠️ 국민 역할 부여 실패: {e}")
+                            changes.append(f"• ⚠️ 조직원 역할 부여 실패: {str(e)[:50]}")
+                            print(f"  ⚠️ 조직원 역할 부여 실패: {e}")
                     else:
-                        print(f"  ℹ️ 이미 국민 역할 보유: {success_role.name}")
+                        print(f"  ℹ️ 이미 조직원 역할 보유: {success_role.name}")
                 else:
-                    print(f"  ⚠️ 국민 역할을 찾을 수 없음 (ID: {SUCCESS_ROLE_ID})")
-            
+                    print(f"  ⚠️ 조직원 역할을 찾을 수 없음 (ID: {SUCCESS_ROLE_ID})")
+
             # 외국인 역할 제거
             if SUCCESS_ROLE_ID_OUT != 0:
                 out_role = guild.get_role(SUCCESS_ROLE_ID_OUT)
@@ -279,13 +276,63 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
                     except Exception as e:
                         changes.append(f"• ⚠️ 외국인 역할 제거 실패: {str(e)[:50]}")
                         print(f"  ⚠️ 외국인 역할 제거 실패: {e}")
-            
-            # 동맹 국가인 경우 국가별 역할도 부여
-            if is_alliance_nation and nation != "무소속":
+
+            # 기본 국가도 국가별 역할 부여 (선택사항)
+            if nation != "무소속":
+                try:
+                    nation_role = await create_nation_role_if_needed(guild, nation)
+
+                    if nation_role:
+                        if nation_role not in member.roles:
+                            await member.add_roles(nation_role)
+                            changes.append(f"• **{nation_role.name}** 국가 역할 추가됨")
+                            print(f"  ✅ 기본 국가 역할 부여: {nation_role.name}")
+                        else:
+                            print(f"  ℹ️ 이미 기본 국가 역할 보유: {nation_role.name}")
+
+                except Exception as e:
+                    changes.append(f"• ⚠️ 국가 역할 처리 실패: {str(e)[:50]}")
+                    print(f"  ⚠️ 국가 역할 처리 실패 ({nation}): {e}")
+
+        elif is_alliance_nation:
+            # 동맹 국가 국민 - 외국인 역할 + 국가별 역할 부여
+            print(f"  🤝 {nation} 동맹 국가 국민 확인됨")
+
+            # 외국인 역할(SUCCESS_ROLE_ID_OUT) 부여
+            if SUCCESS_ROLE_ID_OUT != 0:
+                out_role = guild.get_role(SUCCESS_ROLE_ID_OUT)
+                if out_role:
+                    if out_role not in member.roles:
+                        try:
+                            await member.add_roles(out_role)
+                            changes.append(f"• **{out_role.name}** 역할 추가됨 (동맹)")
+                            print(f"  ✅ 외국인 역할 부여: {out_role.name}")
+                        except Exception as e:
+                            changes.append(f"• ⚠️ 외국인 역할 부여 실패: {str(e)[:50]}")
+                            print(f"  ⚠️ 외국인 역할 부여 실패: {e}")
+                    else:
+                        print(f"  ℹ️ 이미 외국인 역할 보유: {out_role.name}")
+                else:
+                    print(f"  ⚠️ 외국인 역할을 찾을 수 없음 (ID: {SUCCESS_ROLE_ID_OUT})")
+
+            # 조직원 역할 제거
+            if SUCCESS_ROLE_ID != 0:
+                success_role = guild.get_role(SUCCESS_ROLE_ID)
+                if success_role and success_role in member.roles:
+                    try:
+                        await member.remove_roles(success_role)
+                        changes.append(f"• **{success_role.name}** 역할 제거됨")
+                        print(f"  ✅ 조직원 역할 제거: {success_role.name}")
+                    except Exception as e:
+                        changes.append(f"• ⚠️ 조직원 역할 제거 실패: {str(e)[:50]}")
+                        print(f"  ⚠️ 조직원 역할 제거 실패: {e}")
+
+            # 동맹 국가별 역할 부여
+            if nation != "무소속":
                 try:
                     # 국가 역할이 없으면 자동 생성
                     nation_role = await create_nation_role_if_needed(guild, nation)
-                    
+
                     if nation_role:
                         if nation_role not in member.roles:
                             await member.add_roles(nation_role)
@@ -296,28 +343,10 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
                     else:
                         changes.append(f"• ⚠️ {nation} 국가 역할 생성/부여 실패")
                         print(f"  ⚠️ {nation} 국가 역할 처리 실패")
-                        
+
                 except Exception as e:
                     changes.append(f"• ⚠️ 국가 역할 처리 실패: {str(e)[:50]}")
                     print(f"  ⚠️ 국가 역할 처리 실패 ({nation}): {e}")
-            
-            # 기본 국가인 경우에도 국가 역할 부여 (선택사항)
-            elif is_base_nation and nation != "무소속":
-                try:
-                    # 기본 국가도 국가별 역할을 원한다면 이 부분 활성화
-                    nation_role = await create_nation_role_if_needed(guild, nation)
-                    
-                    if nation_role:
-                        if nation_role not in member.roles:
-                            await member.add_roles(nation_role)
-                            changes.append(f"• **{nation_role.name}** 기본 국가 역할 추가됨")
-                            print(f"  ✅ 기본 국가 역할 부여: {nation_role.name}")
-                        else:
-                            print(f"  ℹ️ 이미 기본 국가 역할 보유: {nation_role.name}")
-                            
-                except Exception as e:
-                    changes.append(f"• ⚠️ 기본 국가 역할 처리 실패: {str(e)[:50]}")
-                    print(f"  ⚠️ 기본 국가 역할 처리 실패 ({nation}): {e}")
             
         else:
             # 외국인 또는 무소속
