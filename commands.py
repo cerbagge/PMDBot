@@ -2448,20 +2448,20 @@ class SlashCommands(commands.Cog):
                 if nation == BASE_NATION:
                     embed = discord.Embed(
                         title="✅ 국민 확인 완료",
-                        description=f"**{BASE_NATION}** 국민으로 확인되었습니다!",
+                        description=f"**``{BASE_NATION}``** 국민으로 확인되었습니다!",
                         color=0x00ff00
                     )
                 else:
                     embed = discord.Embed(
                         title="⚠️ 다른 국가 소속",
-                        description=f"**{nation}** 국가에 소속되어 있습니다.",
+                        description=f"**``{nation}``** 국가에 소속되어 있습니다.",
                         color=0xff9900
                     )
 
                 # 마인크래프트 정보
                 embed.add_field(
                     name="🎮 마인크래프트 정보",
-                    value=f"**닉네임:** {mc_id}\n**마을:** {town}\n**국가:** {nation}",
+                    value=f"**닉네임:** ``{mc_id}``\n**마을:** ``{town}``\n**국가:** ``{nation}``",
                     inline=False
                 )
 
