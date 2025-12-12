@@ -2,7 +2,7 @@
 
 Planet Earth Minecraft 서버용 디스코드 봇입니다. 국가/마을 관리, 콜사인 시스템, 자동 역할 부여 등의 기능을 제공합니다.
 
-## ⓒ 2025. MF_MNT(leemoon0404star@gmail.com)
+## ⓒ 2025. MF_MNT(cerbaggemoon@gmail.com)
 
 ---
 
