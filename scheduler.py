@@ -175,8 +175,10 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
         if TOWN_ROLE_ENABLED and town_role_manager:
             try:
                 # 1. 먼저 기존 마을 역할들을 모두 제거
-                all_mapped_towns = town_role_manager.get_all_mappings()
-                for mapped_town, mapped_role_id in all_mapped_towns.items():
+                all_mapped_towns = town_role_manager.get_all_mappings_flat()
+                for mapping in all_mapped_towns:
+                    mapped_town = mapping['town_name']
+                    mapped_role_id = mapping['role_id']
                     if mapped_town != town:  # 현재 마을이 아닌 역할들만
                         mapped_role = guild.get_role(mapped_role_id)
                         if mapped_role and mapped_role in member.roles:
