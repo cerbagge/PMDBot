@@ -78,8 +78,7 @@ except ImportError as e:
 
 # 동맹 시스템 설정 (town_role_manager와 독립적)
 ALLIANCE_DATA_PATH = "data/alliances.json"
-ROLE_DATA_PATH = "data/alliance_roles.json"  
-MEMBER_DATA_PATH = "data/member_countries.json"
+ROLE_DATA_PATH = "data/alliance_roles.json"
 
 # 데이터 디렉토리 생성
 os.makedirs("data", exist_ok=True)
@@ -109,19 +108,6 @@ def load_role_data():
 def save_role_data(data):
     """역할 데이터 저장"""
     with open(ROLE_DATA_PATH, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-def load_member_countries():
-    """멤버 국가 데이터 로드"""
-    try:
-        with open(MEMBER_DATA_PATH, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {"members": {}}
-
-def save_member_countries(data):
-    """멤버 국가 데이터 저장"""
-    with open(MEMBER_DATA_PATH, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 async def get_country_info(country_name):
@@ -1350,26 +1336,32 @@ class SlashCommands(commands.Cog):
     @app_commands.command(name="동맹확인", description="모든 멤버의 동맹 역할을 재확인합니다")
     @app_commands.check(is_admin)
     async def 동맹확인(self, interaction: discord.Interaction):
-        """모든 멤버의 동맹 역할 재확인"""
+        """모든 멤버의 동맹 역할 재확인 (데이터베이스 기반)"""
         await interaction.response.defer()
-        
+
         alliance_data = load_alliance_data()
         role_data = load_role_data()
-        member_data = load_member_countries()
-        
+
         updated_count = 0
         removed_count = 0
-        
+        checked_count = 0
+
         # 모든 멤버 확인
         for member in interaction.guild.members:
-            user_id = str(member.id)
-            if user_id in member_data["members"]:
-                user_country = member_data["members"][user_id]
-                
+            if member.bot:
+                continue  # 봇 제외
+
+            # 데이터베이스에서 현재 국가 정보 조회
+            nation_info = database_manager.get_current_nation(member.id)
+
+            if nation_info and nation_info.get('nation_name'):
+                user_country = nation_info['nation_name']
+                checked_count += 1
+
                 # 동맹 국가인지 확인
-                alliance = next((a for a in alliance_data["alliances"] 
+                alliance = next((a for a in alliance_data["alliances"]
                                if a["name"].lower() == user_country.lower() and a.get("has_role")), None)
-                
+
                 if alliance:
                     role_id = role_data["roles"].get(alliance["name"])
                     if role_id:
@@ -1378,8 +1370,9 @@ class SlashCommands(commands.Cog):
                             try:
                                 await member.add_roles(role)
                                 updated_count += 1
-                            except:
-                                pass
+                                print(f"✅ {member.display_name}: {alliance['name']} 역할 부여")
+                            except Exception as e:
+                                print(f"⚠️ 역할 부여 실패 ({member.display_name}): {e}")
                 else:
                     # 동맹이 아닌데 역할을 가지고 있는 경우 제거
                     for alliance_name, role_id in role_data["roles"].items():
@@ -1388,9 +1381,10 @@ class SlashCommands(commands.Cog):
                             try:
                                 await member.remove_roles(role)
                                 removed_count += 1
-                            except:
-                                pass
-        
+                                print(f"❌ {member.display_name}: {alliance_name} 역할 제거")
+                            except Exception as e:
+                                print(f"⚠️ 역할 제거 실패 ({member.display_name}): {e}")
+
         embed = discord.Embed(
             title="🔍 동맹 역할 확인 완료",
             description="모든 멤버의 동맹 역할을 확인했습니다.",
@@ -1399,8 +1393,9 @@ class SlashCommands(commands.Cog):
         )
         embed.add_field(name="✅ 역할 부여", value=f"{updated_count}명", inline=True)
         embed.add_field(name="❌ 역할 제거", value=f"{removed_count}명", inline=True)
-        embed.add_field(name="👥 전체 멤버", value=f"{len(interaction.guild.members)}명", inline=True)
-        
+        embed.add_field(name="📊 확인된 멤버", value=f"{checked_count}명", inline=True)
+        embed.add_field(name="👥 전체 멤버", value=f"{len([m for m in interaction.guild.members if not m.bot])}명", inline=True)
+
         await interaction.followup.send(embed=embed)
     
 

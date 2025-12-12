@@ -41,7 +41,6 @@ data/
 callsign_cooldowns.json
 *_cooldowns.json
 exceptions.json
-member_countries.json
 alliance_*.json
 callsigns.json
 

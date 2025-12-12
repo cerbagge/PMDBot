@@ -534,6 +534,46 @@ class DatabaseManager:
             print(f"❌ 국가 히스토리 조회 실패: {e}")
             return []
 
+    def get_current_nation(self, discord_id: int) -> Optional[Dict]:
+        """
+        사용자의 현재 국가 정보 조회 (가장 최근 기록)
+
+        Args:
+            discord_id: 디스코드 사용자 ID
+
+        Returns:
+            국가 정보 딕셔너리 또는 None
+            {
+                'nation_name': str,
+                'nation_uuid': str,
+                'town_name': str,
+                'town_uuid': str,
+                'changed_at': str
+            }
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT nation_name, nation_uuid, town_name, town_uuid, changed_at
+                FROM nation_history
+                WHERE discord_id = ?
+                ORDER BY changed_at DESC
+                LIMIT 1
+            ''', (discord_id,))
+
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                return dict(row)
+            return None
+
+        except Exception as e:
+            print(f"❌ 현재 국가 조회 실패: {e}")
+            return None
+
     def export_to_json(self, output_file: str = "database_export.json") -> bool:
         """
         데이터베이스를 JSON 파일로 내보내기
