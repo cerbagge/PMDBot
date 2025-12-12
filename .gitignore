@@ -37,6 +37,14 @@ data/
 *.csv
 *.json.backup
 
+# User data JSON files (쿨다운, 설정 등)
+callsign_cooldowns.json
+*_cooldowns.json
+exceptions.json
+member_countries.json
+alliance_*.json
+callsigns.json
+
 # Logs
 *.log
 logs/

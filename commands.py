@@ -202,9 +202,29 @@ MC_API_BASE = os.getenv("MC_API_BASE", "https://api.planetearth.kr")
 BASE_NATION = os.getenv("BASE_NATION", "Red_Mafia")
 SUCCESS_ROLE_ID = int(os.getenv("SUCCESS_ROLE_ID", "0"))
 SUCCESS_ROLE_ID_OUT = int(os.getenv("SUCCESS_ROLE_ID_OUT", "0"))
+SUCCESS_CHANNEL_ID = int(os.getenv("SUCCESS_CHANNEL_ID", "0"))
+FAILURE_CHANNEL_ID = int(os.getenv("FAILURE_CHANNEL_ID", "0"))
 
 # 콜사인 쿨타임 저장소 (실제로는 파일이나 DB에 저장해야 함)
 callsign_cooldowns = {}
+
+async def send_log_message(bot, channel_id: int, embed: discord.Embed):
+    """로그 메시지를 지정된 채널에 전송"""
+    try:
+        if channel_id == 0:
+            print("⚠️ 채널 ID가 설정되지 않았습니다.")
+            return
+
+        channel = bot.get_channel(channel_id)
+        if not channel:
+            print(f"⚠️ 채널을 찾을 수 없습니다: {channel_id}")
+            return
+
+        await channel.send(embed=embed)
+        print(f"📨 로그 메시지 전송됨: {channel.name}")
+
+    except Exception as e:
+        print(f"❌ 로그 메시지 전송 실패: {e}")
 
 def check_callsign_cooldown(user_id: int) -> tuple[bool, int]:
     """
@@ -405,72 +425,182 @@ class AllianceConfirmView(discord.ui.View):
 
 class TownRoleConfirmView(discord.ui.View):
     """마을 역할 연동 확인 버튼 뷰"""
-    
+
     def __init__(self, town_name: str, role_id: int, role_obj: discord.Role, is_valid_town: bool):
-        super().__init__(timeout=60.0)  # 60초 타임아웃
+        super().__init__(timeout=180.0)  # 180초 (3분) 타임아웃으로 연장
         self.town_name = town_name
         self.role_id = role_id
         self.role_obj = role_obj
         self.is_valid_town = is_valid_town
         self.result = None
+        self.message = None  # 메시지 저장용
+
+    async def on_timeout(self):
+        """타임아웃 시 호출"""
+        if self.message:
+            try:
+                await self.message.edit(
+                    embed=discord.Embed(
+                        title="⏱️ 시간 초과",
+                        description=f"**{self.town_name}** 마을 역할 연동이 시간 초과로 취소되었습니다.\n다시 시도하려면 `/마을역할` 명령어를 사용하세요.",
+                        color=0xff6600
+                    ),
+                    view=None
+                )
+            except:
+                pass  # 메시지 편집 실패 시 무시
     
     @discord.ui.button(label="✅ 연동하기", style=discord.ButtonStyle.green)
     async def confirm_add(self, interaction: discord.Interaction, button: discord.ui.Button):
         """연동 확인 버튼"""
-        self.result = "confirm"
-        
-        # 매핑 추가
-        if TOWN_ROLE_ENABLED and town_role_manager:
-            town_role_manager.add_mapping(self.town_name, self.role_id)
-        
-        embed = discord.Embed(
-            title="✅ 마을-역할 연동 완료",
-            description=f"**{self.town_name}** 마을이 {self.role_obj.mention} 역할과 연동되었습니다.",
-            color=0x00ff00
-        )
-        
-        embed.add_field(
-            name="📋 연동 정보",
-            value=f"• **마을:** {self.town_name}\n• **역할:** {self.role_obj.mention}\n• **역할 ID:** {self.role_id}",
-            inline=False
-        )
-        
-        if not self.is_valid_town:
+        try:
+            # 먼저 defer로 응답 시작
+            await interaction.response.defer()
+
+            self.result = "confirm"
+
+            # 매핑 추가 - UUID 정보 먼저 가져오기
+            if TOWN_ROLE_ENABLED and town_role_manager:
+                # API에서 마을 정보 조회하여 UUID 가져오기
+                import aiohttp
+                town_uuid = None
+                nation_uuid = None
+                nation_name = None
+
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        # 마을 정보 조회
+                        url = f"{MC_API_BASE}/town?name={self.town_name}"
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                if data.get('status') == 'SUCCESS' and data.get('data'):
+                                    town_data = data['data'][0]
+                                    town_uuid = town_data.get('uuid')
+                                    nation_name = town_data.get('nation')
+
+                                    # 국가 정보 조회하여 nation_uuid 가져오기
+                                    if nation_name:
+                                        url2 = f"{MC_API_BASE}/nation?name={nation_name}"
+                                        async with session.get(url2, timeout=aiohttp.ClientTimeout(total=10)) as response2:
+                                            if response2.status == 200:
+                                                data2 = await response2.json()
+                                                if data2.get('status') == 'SUCCESS' and data2.get('data'):
+                                                    nation_data = data2['data'][0]
+                                                    nation_uuid = nation_data.get('uuid')
+
+                    # UUID를 모두 가져온 경우에만 매핑 추가
+                    if town_uuid and nation_uuid and nation_name:
+                        town_role_manager.add_mapping(
+                            nation_uuid=nation_uuid,
+                            town_uuid=town_uuid,
+                            role_id=self.role_id,
+                            nation_name=nation_name,
+                            town_name=self.town_name
+                        )
+                    else:
+                        raise ValueError(f"마을 또는 국가 UUID를 가져올 수 없습니다. town_uuid={town_uuid}, nation_uuid={nation_uuid}")
+
+                except Exception as api_error:
+                    print(f"❌ API 조회 오류: {api_error}")
+                    raise api_error
+
+            embed = discord.Embed(
+                title="✅ 마을-역할 연동 완료",
+                description=f"**{self.town_name}** 마을이 {self.role_obj.mention} 역할과 연동되었습니다.",
+                color=0x00ff00
+            )
+
             embed.add_field(
-                name="⚠️ 참고사항",
-                value=f"이 마을은 **{BASE_NATION}** 소속이 아닐 수 있습니다.\n관리자가 수동으로 연동을 승인했습니다.",
+                name="📋 연동 정보",
+                value=f"• **마을:** {self.town_name}\n• **역할:** {self.role_obj.mention}\n• **역할 ID:** {self.role_id}",
                 inline=False
             )
-        
-        # 버튼 비활성화
-        for item in self.children:
-            item.disabled = True
-        
-        await interaction.response.edit_message(embed=embed, view=self)
-        self.stop()
+
+            if not self.is_valid_town:
+                embed.add_field(
+                    name="⚠️ 참고사항",
+                    value=f"이 마을은 **{BASE_NATION}** 소속이 아닐 수 있습니다.\n관리자가 수동으로 연동을 승인했습니다.",
+                    inline=False
+                )
+
+            # 버튼 비활성화
+            for item in self.children:
+                item.disabled = True
+
+            # defer 후에는 edit_original_response 사용
+            await interaction.edit_original_response(embed=embed, view=self)
+            self.stop()
+
+        except Exception as e:
+            print(f"❌ 연동하기 버튼 오류: {e}")
+            try:
+                await interaction.followup.send(
+                    embed=discord.Embed(
+                        title="❌ 오류 발생",
+                        description=f"연동 처리 중 오류가 발생했습니다.\n{str(e)[:100]}",
+                        color=0xff0000
+                    ),
+                    ephemeral=True
+                )
+            except:
+                pass
     
     @discord.ui.button(label="❌ 취소하기", style=discord.ButtonStyle.red)
     async def cancel_add(self, interaction: discord.Interaction, button: discord.ui.Button):
         """연동 취소 버튼"""
-        self.result = "cancel"
-        
-        embed = discord.Embed(
-            title="❌ 마을-역할 연동 취소",
-            description=f"**{self.town_name}** 마을과 {self.role_obj.mention} 역할의 연동이 취소되었습니다.",
-            color=0xff6600
-        )
-        
+        try:
+            # 먼저 defer로 응답 시작
+            await interaction.response.defer()
+
+            self.result = "cancel"
+
+            embed = discord.Embed(
+                title="❌ 마을-역할 연동 취소",
+                description=f"**{self.town_name}** 마을과 {self.role_obj.mention} 역할의 연동이 취소되었습니다.",
+                color=0xff6600
+            )
+
+            # 버튼 비활성화
+            for item in self.children:
+                item.disabled = True
+
+            # defer 후에는 edit_original_response 사용
+            await interaction.edit_original_response(embed=embed, view=self)
+            self.stop()
+
+        except Exception as e:
+            print(f"❌ 취소하기 버튼 오류: {e}")
+            try:
+                await interaction.followup.send(
+                    embed=discord.Embed(
+                        title="❌ 오류 발생",
+                        description=f"취소 처리 중 오류가 발생했습니다.\n{str(e)[:100]}",
+                        color=0xff0000
+                    ),
+                    ephemeral=True
+                )
+            except:
+                pass
+    
+    async def on_timeout(self):
+        """타임아웃 시 호출"""
         # 버튼 비활성화
         for item in self.children:
             item.disabled = True
-        
-        await interaction.response.edit_message(embed=embed, view=self)
-        self.stop()
-    
-    async def on_timeout(self):
-        """타임아웃 시 처리"""
-        for item in self.children:
-            item.disabled = True
+
+        if self.message:
+            try:
+                await self.message.edit(
+                    embed=discord.Embed(
+                        title="⏱️ 시간 초과",
+                        description=f"**{self.town_name}** 마을 역할 연동이 시간 초과로 취소되었습니다.\n다시 시도하려면 `/마을역할` 명령어를 사용하세요.",
+                        color=0xff6600
+                    ),
+                    view=self
+                )
+            except Exception as e:
+                print(f"⚠️ 타임아웃 메시지 편집 실패: {e}")
 
 class SlashCommands(commands.Cog):
     def __init__(self, bot):
@@ -2111,34 +2241,37 @@ class SlashCommands(commands.Cog):
         elif 기능 == "목록":
             # 현재 연동된 마을-역할 목록 표시
             try:
-                mappings = town_role_manager.get_all_mappings()
-                
+                mappings = town_role_manager.get_all_mappings_flat()
+
                 embed = discord.Embed(
                     title="📋 마을-역할 연동 목록",
                     color=0x00bfff
                 )
-                
+
                 if not mappings:
                     embed.description = "현재 연동된 마을-역할이 없습니다."
                 else:
                     embed.description = f"총 **{len(mappings)}개**의 마을-역할이 연동되어 있습니다."
-                    
+
                     # 10개씩 나누어서 표시
-                    items = list(mappings.items())
-                    for i in range(0, len(items), 10):
-                        chunk = items[i:i+10]
+                    for i in range(0, len(mappings), 10):
+                        chunk = mappings[i:i+10]
                         field_items = []
-                        
-                        for town_name, role_id in chunk:
+
+                        for mapping in chunk:
+                            town_name = mapping['town_name']
+                            role_id = mapping['role_id']
+                            nation_name = mapping.get('nation_name', 'Unknown')
+
                             # 역할이 존재하는지 확인
                             role = interaction.guild.get_role(role_id)
                             if role:
-                                field_items.append(f"• **{town_name}** → {role.mention}")
+                                field_items.append(f"• **{town_name}** ({nation_name}) → {role.mention}")
                             else:
-                                field_items.append(f"• **{town_name}** → ⚠️ 역할 없음 (ID: {role_id})")
-                        
+                                field_items.append(f"• **{town_name}** ({nation_name}) → ⚠️ 역할 없음 (ID: {role_id})")
+
                         embed.add_field(
-                            name=f"연동 목록 ({i+1}-{min(i+10, len(items))})",
+                            name=f"연동 목록 ({i+1}-{min(i+10, len(mappings))})",
                             value="\n".join(field_items),
                             inline=False
                         )
@@ -2225,14 +2358,16 @@ class SlashCommands(commands.Cog):
                 embed.add_field(
                     name="🔧 다음 단계",
                     value="아래 버튼을 클릭하여 연동을 진행하거나 취소하세요.\n"
-                          "60초 후 자동으로 취소됩니다.",
+                          "3분 후 자동으로 취소됩니다.",
                     inline=False
                 )
-                
+
                 # 버튼 뷰 생성
                 view = TownRoleConfirmView(마을, role_id, role_obj, is_valid_town)
-                
-                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+                # 메시지 전송 후 뷰에 메시지 저장
+                message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+                view.message = message
                 return
                     
             except Exception as e:
@@ -2280,384 +2415,43 @@ class SlashCommands(commands.Cog):
 
     @app_commands.command(name="확인", description="자신의 국적을 확인하고 역할을 받습니다")
     async def 확인(self, interaction: discord.Interaction):
-        """사용자 본인의 국적 확인 및 역할 부여 - 마을 역할 및 콜사인 포함"""
+        """사용자 본인의 국적 확인 및 역할 부여 - scheduler의 process_single_user 사용"""
         await interaction.response.defer(thinking=True)
-        
+
         member = interaction.user
         discord_id = member.id
-        
+
         print(f"🔍 /확인 명령어 시작 - 사용자: {member.display_name} (ID: {discord_id})")
-        
+
+        # scheduler의 process_single_user 함수 import
+        try:
+            from scheduler import process_single_user
+        except ImportError:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="❌ 오류",
+                    description="scheduler 모듈을 로드할 수 없습니다.",
+                    color=0xff0000
+                ),
+                ephemeral=True
+            )
+            return
+
+        # aiohttp 세션 생성 및 처리
         try:
             async with aiohttp.ClientSession() as session:
-                # 1단계: 디스코드 ID → 마크 ID
-                url1 = f"{MC_API_BASE}/discord?discord={discord_id}"
-                print(f"  🔗 1단계 API 호출: {url1}")
-                
-                async with session.get(url1, timeout=aiohttp.ClientTimeout(total=10)) as r1:
-                    print(f"  📥 1단계 응답: HTTP {r1.status}")
-                    if r1.status != 200:
-                        await interaction.followup.send(
-                            embed=discord.Embed(
-                                title="❌ 확인 실패",
-                                description="마인크래프트 계정 정보를 찾을 수 없습니다.\n디스코드와 마인크래프트 계정이 연동되어 있는지 확인해주세요.",
-                                color=0xff0000
-                            ),
-                            ephemeral=True
-                        )
-                        return
-                    
-                    data1 = await r1.json()
-                    print(f"  📋 1단계 데이터: {data1}")
-                    
-                    if not data1.get('data') or not data1['data']:
-                        await interaction.followup.send(
-                            embed=discord.Embed(
-                                title="❌ 확인 실패",
-                                description="마인크래프트 계정 정보가 없습니다.\n디스코드와 마인크래프트 계정이 연동되어 있는지 확인해주세요.",
-                                color=0xff0000
-                            ),
-                            ephemeral=True
-                        )
-                        return
-                        
-                    mc_id = data1['data'][0].get('name')
-                    if not mc_id:
-                        await interaction.followup.send(
-                            embed=discord.Embed(
-                                title="❌ 확인 실패",
-                                description="마인크래프트 닉네임을 찾을 수 없습니다.",
-                                color=0xff0000
-                            ),
-                            ephemeral=True
-                        )
-                        return
-                    
-                    print(f"  ✅ 마크 ID 획득: {mc_id}")
-                    time.sleep(2)
+                await process_single_user(interaction.client, session, discord_id)
 
-                # 2단계: 마크 ID → 마을
-                url2 = f"{MC_API_BASE}/resident?name={mc_id}"
-                print(f"  🔗 2단계 API 호출: {url2}")
-                
-                async with session.get(url2, timeout=aiohttp.ClientTimeout(total=10)) as r2:
-                    print(f"  📥 2단계 응답: HTTP {r2.status}")
-                    if r2.status != 200:
-                        await interaction.followup.send(
-                            embed=discord.Embed(
-                                title="❌ 확인 실패",
-                                description=f"마을 정보를 조회할 수 없습니다.\n마인크래프트 닉네임: **{mc_id}**",
-                                color=0xff0000
-                            ),
-                            ephemeral=True
-                        )
-                        return
-                        
-                    data2 = await r2.json()
-                    print(f"  📋 2단계 데이터: {data2}")
-                    
-                    if not data2.get('data') or not data2['data']:
-                        await interaction.followup.send(
-                            embed=discord.Embed(
-                                title="❌ 확인 실패",
-                                description=f"마을에 소속되어 있지 않습니다.\n마인크래프트 닉네임: **{mc_id}**",
-                                color=0xff0000
-                            ),
-                            ephemeral=True
-                        )
-                        return
-                        
-                    town = data2['data'][0].get('town')
-                    if not town:
-                        await interaction.followup.send(
-                            embed=discord.Embed(
-                                title="❌ 확인 실패",
-                                description=f"마을 정보가 없습니다.\n마인크래프트 닉네임: **{mc_id}**",
-                                color=0xff0000
-                            ),
-                            ephemeral=True
-                        )
-                        return
-                    
-                    print(f"  ✅ 마을 획득: {town}")
-                    time.sleep(2)
-
-                # 3단계: 마을 → 국가
-                url3 = f"{MC_API_BASE}/town?name={town}"
-                print(f"  🔗 3단계 API 호출: {url3}")
-                
-                async with session.get(url3, timeout=aiohttp.ClientTimeout(total=10)) as r3:
-                    print(f"  📥 3단계 응답: HTTP {r3.status}")
-                    if r3.status != 200:
-                        await interaction.followup.send(
-                            embed=discord.Embed(
-                                title="❌ 확인 실패",
-                                description=f"국가 정보를 조회할 수 없습니다.\n마을: **{town}**",
-                                color=0xff0000
-                            ),
-                            ephemeral=True
-                        )
-                        return
-                        
-                    data3 = await r3.json()
-                    print(f"  📋 3단계 데이터: {data3}")
-                    
-                    if not data3.get('data') or not data3['data']:
-                        await interaction.followup.send(
-                            embed=discord.Embed(
-                                title="❌ 확인 실패",
-                                description=f"국가에 소속되어 있지 않습니다.\n마을: **{town}**",
-                                color=0xff0000
-                            ),
-                            ephemeral=True
-                        )
-                        return
-                        
-                    nation = data3['data'][0].get('nation')
-                    if not nation:
-                        await interaction.followup.send(
-                            embed=discord.Embed(
-                                title="❌ 확인 실패",
-                                description=f"국가 정보가 없습니다.\n마을: **{town}**",
-                                color=0xff0000
-                            ),
-                            ephemeral=True
-                        )
-                        return
-                    
-                    print(f"  ✅ 국가 획득: {nation}")
-
-            # 역할 부여 및 닉네임 변경
-            guild = interaction.guild
-            member = guild.get_member(discord_id)
-            
-            if not member:
-                await interaction.followup.send(
-                    embed=discord.Embed(
-                        title="❌ 오류",
-                        description="서버에서 사용자를 찾을 수 없습니다.",
-                        color=0xff0000
-                    ),
-                    ephemeral=True
-                )
-                return
-
-            # 새 닉네임 설정 (콜사인 고려 - BASE_NATION 국민만)
-            if CALLSIGN_ENABLED and callsign_manager and nation == BASE_NATION:
-                try:
-                    user_callsign = callsign_manager.get_callsign(discord_id)
-                    if user_callsign:
-                        new_nickname = f"{mc_id} ㅣ {user_callsign}"
-                        print(f"  🏷️ BASE_NATION 국민 콜사인 적용: {user_callsign}")
-                    else:
-                        new_nickname = f"{mc_id} ㅣ {nation}"
-                        print(f"  🏴 BASE_NATION 국민 콜사인 없음: 국가명 사용")
-                except Exception as e:
-                    print(f"  ⚠️ 콜사인 확인 오류: {e}")
-                    new_nickname = f"{mc_id} ㅣ {nation}"
-            else:
-                new_nickname = f"{mc_id} ㅣ {nation}"
-                if nation != BASE_NATION:
-                    print(f"  🌍 다른 국가 소속으로 콜사인 미적용: {nation}")
-            
-            # 변경 사항 추적
-            changes = []
-            
-            try:
-                # 닉네임 변경
-                if member.display_name != new_nickname:
-                    await member.edit(nick=new_nickname)
-                    changes.append(f"• 닉네임이 **``{new_nickname}``**로 변경됨")
-                    print(f"  ✅ 닉네임 변경: {new_nickname}")
-                else:
-                    print(f"  ℹ️ 닉네임 유지: {new_nickname}")
-            except discord.Forbidden:
-                changes.append("• ⚠️ 닉네임 변경 권한 없음")
-                print(f"  ⚠️ 닉네임 변경 권한 없음")
-            except Exception as e:
-                changes.append(f"• ⚠️ 닉네임 변경 실패: {str(e)[:50]}")
-                print(f"  ⚠️ 닉네임 변경 실패: {e}")
-
-            # 매핑된 마을 역할 부여 (새로운 시스템)
-            town_role_added = None
-            if TOWN_ROLE_ENABLED and town_role_manager:
-                try:
-                    role_id = town_role_manager.get_role_id(town)
-                    if role_id:
-                        town_role = guild.get_role(role_id)
-                        if town_role:
-                            if town_role not in member.roles:
-                                await member.add_roles(town_role)
-                                town_role_added = town_role.name
-                                changes.append(f"• **{town_role.name}** 마을 역할 추가됨")
-                                print(f"  ✅ 매핑된 마을 역할 부여: {town_role.name}")
-                            else:
-                                print(f"  ℹ️ 이미 마을 역할 보유: {town_role.name}")
-                        else:
-                            changes.append(f"• ⚠️ 마을 역할을 찾을 수 없음 (ID: {role_id})")
-                            print(f"  ⚠️ 마을 역할 없음: {role_id}")
-                    else:
-                        changes.append(f"• ℹ️ **{town}** 마을은 역할이 연동되지 않음")
-                        print(f"  ℹ️ {town} 마을은 역할이 매핑되지 않음")
-                except Exception as e:
-                    changes.append(f"• ⚠️ 마을 역할 처리 실패: {str(e)[:50]}")
-                    print(f"  ⚠️ 마을 역할 처리 실패: {e}")
-
-            # 동맹 역할 확인 및 부여 (새로 추가)
-            member_data = load_member_countries()
-            user_id_str = str(discord_id)
-            if user_id_str in member_data["members"]:
-                user_country = member_data["members"][user_id_str]
-                await self.check_and_assign_role(member, user_country)
-
-            # 동맹 국가 확인
-            is_alliance_nation = False
-            if ALLIANCE_ENABLED and alliance_manager:
-                is_alliance_nation = alliance_manager.is_alliance_name(nation)
-
-            # 국가별 역할 부여 (동맹 로직 추가)
-            role_added = None
-            role_removed = None
-
-            if nation == BASE_NATION:
-                # 기본 국가 국민 - 조직원 역할 부여
-                if SUCCESS_ROLE_ID != 0:
-                    success_role = guild.get_role(SUCCESS_ROLE_ID)
-                    if success_role:
-                        if success_role not in member.roles:
-                            try:
-                                await member.add_roles(success_role)
-                                role_added = success_role.name
-                                changes.append(f"• **{success_role.name}** 역할 추가됨")
-                                print(f"  ✅ 조직원 역할 부여: {success_role.name}")
-                            except Exception as e:
-                                changes.append(f"• ⚠️ 조직원 역할 부여 실패: {str(e)[:50]}")
-                                print(f"  ⚠️ 조직원 역할 부여 실패: {e}")
-                        else:
-                            print(f"  ℹ️ 이미 조직원 역할 보유: {success_role.name}")
-
-                # 외국인 역할 제거
-                if SUCCESS_ROLE_ID_OUT != 0:
-                    out_role = guild.get_role(SUCCESS_ROLE_ID_OUT)
-                    if out_role and out_role in member.roles:
-                        try:
-                            await member.remove_roles(out_role)
-                            role_removed = out_role.name
-                            changes.append(f"• **{out_role.name}** 역할 제거됨")
-                            print(f"  ✅ 외국인 역할 제거: {out_role.name}")
-                        except Exception as e:
-                            changes.append(f"• ⚠️ 외국인 역할 제거 실패: {str(e)[:50]}")
-                            print(f"  ⚠️ 외국인 역할 제거 실패: {e}")
-
-                # 성공 메시지 (기본 국가)
-                embed = discord.Embed(
-                    title="✅ 국민 확인 완료",
-                    description=f"**{BASE_NATION}** 국민으로 확인되었습니다!",
+            # 처리 완료 메시지
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="✅ 처리 완료",
+                    description="국적 확인이 완료되었습니다.\n결과는 성공/실패 채널에서 확인하실 수 있습니다.",
                     color=0x00ff00
-                )
-
-            elif is_alliance_nation:
-                # 동맹 국가 국민 - 외국인 역할 부여
-                if SUCCESS_ROLE_ID_OUT != 0:
-                    out_role = guild.get_role(SUCCESS_ROLE_ID_OUT)
-                    if out_role:
-                        if out_role not in member.roles:
-                            try:
-                                await member.add_roles(out_role)
-                                role_added = out_role.name
-                                changes.append(f"• **{out_role.name}** 역할 추가됨 (동맹)")
-                                print(f"  ✅ 외국인 역할 부여 (동맹): {out_role.name}")
-                            except Exception as e:
-                                changes.append(f"• ⚠️ 외국인 역할 부여 실패: {str(e)[:50]}")
-                                print(f"  ⚠️ 외국인 역할 부여 실패: {e}")
-                        else:
-                            print(f"  ℹ️ 이미 외국인 역할 보유: {out_role.name}")
-
-                # 조직원 역할 제거
-                if SUCCESS_ROLE_ID != 0:
-                    success_role = guild.get_role(SUCCESS_ROLE_ID)
-                    if success_role and success_role in member.roles:
-                        try:
-                            await member.remove_roles(success_role)
-                            role_removed = success_role.name
-                            changes.append(f"• **{success_role.name}** 역할 제거됨")
-                            print(f"  ✅ 조직원 역할 제거: {success_role.name}")
-                        except Exception as e:
-                            changes.append(f"• ⚠️ 조직원 역할 제거 실패: {str(e)[:50]}")
-                            print(f"  ⚠️ 조직원 역할 제거 실패: {e}")
-
-                # 성공 메시지 (동맹 국가)
-                embed = discord.Embed(
-                    title="✅ 동맹 국가 국민 확인 완료",
-                    description=f"**{nation}** 동맹 국가 국민으로 확인되었습니다!",
-                    color=0x00ff00
-                )
-
-            else:
-                # 외국인 - 외국인 역할 부여
-                if SUCCESS_ROLE_ID_OUT != 0:
-                    out_role = guild.get_role(SUCCESS_ROLE_ID_OUT)
-                    if out_role:
-                        if out_role not in member.roles:
-                            try:
-                                await member.add_roles(out_role)
-                                role_added = out_role.name
-                                changes.append(f"• **{out_role.name}** 역할 추가됨")
-                                print(f"  ✅ 외국인 역할 부여: {out_role.name}")
-                            except Exception as e:
-                                changes.append(f"• ⚠️ 외국인 역할 부여 실패: {str(e)[:50]}")
-                                print(f"  ⚠️ 외국인 역할 부여 실패: {e}")
-                        else:
-                            print(f"  ℹ️ 이미 외국인 역할 보유: {out_role.name}")
-
-                # 조직원 역할 제거
-                if SUCCESS_ROLE_ID != 0:
-                    success_role = guild.get_role(SUCCESS_ROLE_ID)
-                    if success_role and success_role in member.roles:
-                        try:
-                            await member.remove_roles(success_role)
-                            role_removed = success_role.name
-                            changes.append(f"• **{success_role.name}** 역할 제거됨")
-                            print(f"  ✅ 조직원 역할 제거: {success_role.name}")
-                        except Exception as e:
-                            changes.append(f"• ⚠️ 조직원 역할 제거 실패: {str(e)[:50]}")
-                            print(f"  ⚠️ 조직원 역할 제거 실패: {e}")
-
-                # 성공 메시지 (외국인)
-                embed = discord.Embed(
-                    title="⚠️ 다른 국가 소속",
-                    description=f"**{nation}** 국가에 소속되어 있습니다.",
-                    color=0xff9900
-                )
-
-            # 공통 정보 추가
-            embed.add_field(
-                name="🎮 마인크래프트 정보",
-                value=f"**닉네임:** {mc_id}\n**마을:** {town}\n**국가:** {nation}",
-                inline=False
+                ),
+                ephemeral=True
             )
-            
-            # 변경 사항 표시
-            if changes:
-                # 너무 많은 변경사항이 있을 경우 요약
-                if len("\n".join(changes)) > 1000:
-                    changes = changes[:10]  # 최대 10개만 표시
-                    changes.append("• ...")
-                
-                embed.add_field(
-                    name="🔄 변경 사항",
-                    value="\n".join(changes),
-                    inline=False
-                )
-            else:
-                embed.add_field(
-                    name="ℹ️ 변경 사항",
-                    value="변경된 사항이 없습니다.",
-                    inline=False
-                )
-            
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            print(f"🏁 /확인 처리 완료 - {member.display_name}: {nation}, {town}")
+            print(f"🏁 /확인 처리 완료 - {member.display_name}")
 
         except Exception as e:
             print(f"💥 /확인 예외 발생: {e}")
@@ -2669,6 +2463,29 @@ class SlashCommands(commands.Cog):
                 ),
                 ephemeral=True
             )
+
+    # /확인 명령어 리팩토링 완료 - 이제 scheduler.process_single_user 사용
+    # 이전 코드는 모두 삭제됨
+
+    @app_commands.command(name="마을테스트", description="[관리자] 마을 검증 기능을 테스트합니다")
+    @app_commands.describe(마을="테스트할 마을 이름")
+    @app_commands.check(is_admin)
+    async def 마을테스트(self, interaction: discord.Interaction, 마을: str = None):
+        """마을 검증 기능 디버깅"""
+        await interaction.response.defer(thinking=True)
+
+        embed = discord.Embed(
+            title="🧪 마을 검증 테스트",
+            color=0x00ff00
+        )
+
+        # (여기에 마을테스트 코드가 계속됨 - 중복 제거를 위해 아래 마을테스트만 유지)
+        await interaction.followup.send(embed=discord.Embed(
+            title="⚠️ 중복 명령어",
+            description="이 명령어는 중복되어 제거될 예정입니다.",
+            color=0xffaa00
+        ), ephemeral=True)
+
     @app_commands.command(name="마을테스트", description="[관리자] 마을 검증 기능을 테스트합니다")
     @app_commands.describe(마을="테스트할 마을 이름")
     @app_commands.check(is_admin)
@@ -3164,61 +2981,58 @@ class SlashCommands(commands.Cog):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="국민확인", description="디스코드 아이디를 이용해서 국민이 어떤 나라에 속해있는지 알려줍니다")
+    @app_commands.command(name="대기열추가", description="유저 또는 역할의 멤버들을 대기열에 추가합니다")
     @app_commands.describe(
-        대상="확인할 대상 유형을 선택하세요",
-        멘션or아이디="유저: @유저 또는 유저ID / 역할: @역할 또는 역할ID"
+        대상="유저 또는 역할을 선택하세요 (자동 감지)"
     )
     @app_commands.check(is_admin)
-    async def 국민확인(
+    async def 대기열추가(
         self,
         interaction: discord.Interaction,
-        대상: Literal["유저", "역할"],
-        멘션or아이디: str
+        대상: str
     ):
+        """유저 또는 역할을 자동으로 감지하여 대기열에 추가"""
         guild = interaction.guild
         members = []
-        target_type = 대상
         target_name = None
+        target_type = None
 
         # 멘션 형식 처리 (< > 제거)
-        input_clean = 멘션or아이디.replace('<@', '').replace('<@&', '').replace('>', '').replace('!', '')
+        input_clean = 대상.replace('<@', '').replace('<@&', '').replace('>', '').replace('!', '')
 
         try:
-            input_int = int(input_clean)
+            input_id = int(input_clean)
         except ValueError:
             await interaction.response.send_message(
                 "❌ 올바른 형식을 입력해주세요.\n"
-                f"**{대상} 선택 시**: {'@유저이름 또는 유저ID' if 대상 == '유저' else '@역할이름 또는 역할ID'}",
+                "**사용법**: `/대기열추가 대상:@유저` 또는 `/대기열추가 대상:@역할`",
                 ephemeral=True
             )
             return
 
-        if 대상 == "유저":
-            # 유저 처리 - 즉시 처리
-            member = guild.get_member(input_int)
-            if member:
-                members.append(member)
-                target_name = member.display_name
-            else:
-                await interaction.response.send_message("❌ 유저를 찾을 수 없습니다.", ephemeral=True)
-                return
-                
-            # 유저는 즉시 처리
-            await self._handle_immediate_processing(interaction, members, target_type, target_name)
-            
-        elif 대상 == "역할":
-            # 역할 처리 - 대기열로 처리
-            role = guild.get_role(input_int)
+        # 유저인지 확인
+        member = guild.get_member(input_id)
+        if member:
+            members.append(member)
+            target_name = member.display_name
+            target_type = "유저"
+        else:
+            # 역할인지 확인
+            role = guild.get_role(input_id)
             if role:
                 members.extend(role.members)
                 target_name = role.name
+                target_type = "역할"
             else:
-                await interaction.response.send_message("❌ 역할을 찾을 수 없습니다.", ephemeral=True)
+                await interaction.response.send_message(
+                    "❌ 유저 또는 역할을 찾을 수 없습니다.\n"
+                    "올바른 멘션을 사용했는지 확인해주세요.",
+                    ephemeral=True
+                )
                 return
-                
-            # 역할은 대기열로 처리
-            await self._handle_queue_processing(interaction, members, target_type, target_name)
+
+        # 대기열로 처리
+        await self._handle_queue_processing(interaction, members, target_type, target_name)
 
     async def _handle_queue_processing(self, interaction: discord.Interaction, members: list, target_type: str, target_name: str):
         """대기열을 통한 처리"""
@@ -4242,7 +4056,6 @@ class SlashCommands(commands.Cog):
     @스케줄확인.error
     @자동실행시작.error
     @예외설정.error
-    @국민확인.error
     @대기열상태.error
     @대기열초기화.error
     @자동실행.error

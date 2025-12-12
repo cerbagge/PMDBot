@@ -287,12 +287,12 @@ class DatabaseManager:
             print(f"❌ UUID 검색 실패: {e}")
             return None
 
-    def get_all_users(self, limit: int = 100, offset: int = 0) -> List[Dict]:
+    def get_all_users(self, limit: int = None, offset: int = 0) -> List[Dict]:
         """
         모든 사용자 조회 (페이지네이션)
 
         Args:
-            limit: 조회할 최대 개수
+            limit: 조회할 최대 개수 (None이면 전체 조회)
             offset: 건너뛸 개수
 
         Returns:
@@ -302,11 +302,19 @@ class DatabaseManager:
             conn = self.get_connection()
             cursor = conn.cursor()
 
-            cursor.execute('''
-                SELECT * FROM users
-                ORDER BY last_updated DESC
-                LIMIT ? OFFSET ?
-            ''', (limit, offset))
+            if limit is None:
+                # limit이 None이면 전체 조회
+                cursor.execute('''
+                    SELECT * FROM users
+                    ORDER BY last_updated DESC
+                ''')
+            else:
+                # limit이 있으면 페이지네이션
+                cursor.execute('''
+                    SELECT * FROM users
+                    ORDER BY last_updated DESC
+                    LIMIT ? OFFSET ?
+                ''', (limit, offset))
 
             rows = cursor.fetchall()
             conn.close()
