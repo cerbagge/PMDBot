@@ -2444,9 +2444,6 @@ class SlashCommands(commands.Cog):
                 mc_id = result.get('mc_id', 'Unknown')
                 role_changes = result.get('role_changes', [])
 
-                # BASE_NATION import
-                from config import BASE_NATION
-
                 # 국가에 따른 메시지 생성
                 if nation == BASE_NATION:
                     embed = discord.Embed(
