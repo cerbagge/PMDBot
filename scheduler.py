@@ -186,7 +186,7 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
 
                 # 2. 새 마을 역할 부여 (무소속이 아닌 경우)
                 if town and town != "무소속" and town != "❌":
-                    role_id = town_role_manager.get_role_id(town)
+                    role_id = town_role_manager.get_role_id_by_name(town)
                     if role_id:
                         town_role = guild.get_role(role_id)
                         if town_role:
@@ -1522,7 +1522,7 @@ async def process_single_user(bot, session, user_id):
         
         # 마을 역할 연동 상태 표시
         if TOWN_ROLE_ENABLED and town_role_manager:
-            role_id = town_role_manager.get_role_id(town)
+            role_id = town_role_manager.get_role_id_by_name(town)
             if role_id:
                 town_role = guild.get_role(role_id)
                 if town_role:
@@ -1664,7 +1664,7 @@ async def process_single_user(bot, session, user_id):
                 minecraft_info += f"\n**마을:** {town}"
                 # 마을 역할 연동 상태도 표시
                 if TOWN_ROLE_ENABLED and town_role_manager:
-                    role_id = town_role_manager.get_role_id(town)
+                    role_id = town_role_manager.get_role_id_by_name(town)
                     if role_id:
                         town_role = guild.get_role(role_id) if guild else None
                         if town_role:
@@ -1735,7 +1735,7 @@ async def process_single_user(bot, session, user_id):
                 minecraft_info += f"\n**마을:** {town}"
                 # 마을 역할 연동 상태도 표시
                 if TOWN_ROLE_ENABLED and town_role_manager:
-                    role_id = town_role_manager.get_role_id(town)
+                    role_id = town_role_manager.get_role_id_by_name(town)
                     if role_id:
                         town_role = guild.get_role(role_id) if guild else None
                         if town_role:
