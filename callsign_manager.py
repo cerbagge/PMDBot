@@ -272,30 +272,61 @@ class CallsignManager:
     def check_cooldown(self, user_id: int) -> Tuple[bool, int]:
         """
         콜사인 쿨타임 확인
-        
+
         Returns:
             (사용 가능 여부, 남은 일수)
         """
         user_id_str = str(user_id)
-        
+
         if user_id_str not in self.cooldowns:
             return True, 0
-        
+
         cooldown_end = self.cooldowns[user_id_str]
         now = datetime.now()
-        
+
         if now >= cooldown_end:
             # 쿨타임이 끝났으면 제거
             del self.cooldowns[user_id_str]
             self.save_cooldowns()
             return True, 0
-        
+
         remaining = cooldown_end - now
         remaining_days = remaining.days
         if remaining.seconds > 0:
             remaining_days += 1
-        
+
         return False, remaining_days
+
+    def reset_cooldown(self, user_id: int) -> Tuple[bool, str]:
+        """
+        특정 사용자의 쿨타임 초기화
+
+        Args:
+            user_id: 사용자 ID
+
+        Returns:
+            (성공 여부, 메시지)
+        """
+        user_id_str = str(user_id)
+
+        if user_id_str in self.cooldowns:
+            del self.cooldowns[user_id_str]
+            self.save_cooldowns()
+            return True, "쿨타임이 초기화되었습니다."
+        else:
+            return False, "쿨타임이 설정되어 있지 않습니다."
+
+    def reset_all_cooldowns(self) -> int:
+        """
+        모든 사용자의 쿨타임 초기화
+
+        Returns:
+            초기화된 사용자 수
+        """
+        count = len(self.cooldowns)
+        self.cooldowns.clear()
+        self.save_cooldowns()
+        return count
 
 
 # 콜사인 검증 함수

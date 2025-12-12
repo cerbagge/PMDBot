@@ -1440,14 +1440,14 @@ class SlashCommands(commands.Cog):
     @app_commands.command(name="콜사인관리", description="사용자 콜사인을 관리합니다")
     @app_commands.describe(
         기능="실행할 기능 선택",
-        유저="대상 사용자",
+        유저="대상 사용자 (쿨타임_초기화: 비어있으면 전체, 멘션하면 해당 유저만)",
         텍스트="콜사인 텍스트 또는 사유"
     )
     @app_commands.check(is_admin)
     async def 콜사인관리(
-        self, 
-        interaction: discord.Interaction, 
-        기능: Literal["사용자_조회", "콜사인_변경", "전체_목록", "권한박탈", "권한복구", "권한박탈_목록", "데이터_백업", "백업_목록", "데이터_복구", "백업파일_업로드"],
+        self,
+        interaction: discord.Interaction,
+        기능: Literal["사용자_조회", "콜사인_변경", "전체_목록", "권한박탈", "권한복구", "권한박탈_목록", "쿨타임_초기화", "데이터_백업", "백업_목록", "데이터_복구", "백업파일_업로드"],
         유저: discord.Member = None,
         텍스트: str = None
     ):
@@ -1887,7 +1887,45 @@ class SlashCommands(commands.Cog):
                     embed.set_footer(text=f"... 외 {len(banned_users) - 10}명")
             
             await interaction.response.send_message(embed=embed)
-        
+
+        elif 기능 == "쿨타임_초기화":
+            # 쿨타임 초기화
+            if 유저:
+                # 특정 유저의 쿨타임만 초기화
+                success, message = callsign_manager.reset_cooldown(유저.id)
+
+                embed = discord.Embed(
+                    title="⏰ 쿨타임 초기화" if success else "⚠️ 쿨타임 초기화 실패",
+                    description=f"**대상:** {유저.mention}\n\n{message}",
+                    color=0x00ff00 if success else 0xff9900
+                )
+
+                if success:
+                    embed.add_field(
+                        name="✅ 안내",
+                        value=f"{유저.name}님은 이제 즉시 콜사인을 변경할 수 있습니다.",
+                        inline=False
+                    )
+            else:
+                # 모든 유저의 쿨타임 초기화
+                count = callsign_manager.reset_all_cooldowns()
+
+                embed = discord.Embed(
+                    title="⏰ 전체 쿨타임 초기화",
+                    description=f"총 **{count}명**의 쿨타임이 초기화되었습니다.",
+                    color=0x00ff00
+                )
+
+                embed.add_field(
+                    name="✅ 안내",
+                    value="모든 사용자가 즉시 콜사인을 변경할 수 있습니다.",
+                    inline=False
+                )
+
+                embed.set_footer(text=f"관리자: {interaction.user.name}")
+
+            await interaction.response.send_message(embed=embed)
+
         elif 기능 == "전체_목록":  # 기존: 목록
             # 전체 콜사인 목록 표시 - callsigns 속성을 직접 사용
             all_callsigns = {}
