@@ -1149,7 +1149,7 @@ async def process_single_user(bot, session, user_id):
         # 예외 사용자 확인 (최우선 체크)
         if exception_manager and exception_manager.is_exception(user_id):
             print(f"⏭️ 예외 사용자 건너뜀: {user_id}")
-            return
+            return {'success': False, 'error': '예외 사용자'}
 
         # 모든 길드에서 해당 사용자 찾기
         for g in bot.guilds:
@@ -1177,7 +1177,7 @@ async def process_single_user(bot, session, user_id):
             embed.timestamp = datetime.now()
 
             await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
-            return
+            return {'success': False, 'error': error_message}
 
         # 데이터베이스에서 UUID 먼저 확인 (API 요청 최적화)
         cached_uuid = None
@@ -1560,6 +1560,15 @@ async def process_single_user(bot, session, user_id):
 
         await send_log_message(bot, SUCCESS_CHANNEL_ID, embed)
 
+        # 성공 결과 반환
+        return {
+            'success': True,
+            'nation': nation,
+            'town': town,
+            'mc_id': mc_id,
+            'role_changes': role_changes
+        }
+
     except Exception as e:
         print(f"❌ 사용자 {user_id} 처리 중 오류: {e}")
 
@@ -1760,8 +1769,14 @@ async def process_single_user(bot, session, user_id):
         )
         
         embed.timestamp = datetime.now()
-        
+
         await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
+
+        # 실패 결과 반환
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
 async def execute_auto_roles(bot):
     """자동 역할 실행 함수 - 새로운 자동역할 관리자 사용 (비블로킹)"""

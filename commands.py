@@ -2435,18 +2435,62 @@ class SlashCommands(commands.Cog):
         # aiohttp 세션 생성 및 처리
         try:
             async with aiohttp.ClientSession() as session:
-                await process_single_user(interaction.client, session, discord_id)
+                result = await process_single_user(interaction.client, session, discord_id)
 
-            # 처리 완료 메시지
-            await interaction.followup.send(
-                embed=discord.Embed(
-                    title="✅ 처리 완료",
-                    description="국적 확인이 완료되었습니다.\n결과는 성공/실패 채널에서 확인하실 수 있습니다.",
-                    color=0x00ff00
-                ),
-                ephemeral=True
-            )
-            print(f"🏁 /확인 처리 완료 - {member.display_name}")
+            # 결과 확인 및 사용자별 메시지 생성
+            if result and result.get('success'):
+                nation = result.get('nation', 'Unknown')
+                town = result.get('town', 'Unknown')
+                mc_id = result.get('mc_id', 'Unknown')
+                role_changes = result.get('role_changes', [])
+
+                # BASE_NATION import
+                from config import BASE_NATION
+
+                # 국가에 따른 메시지 생성
+                if nation == BASE_NATION:
+                    embed = discord.Embed(
+                        title="✅ 국민 확인 완료",
+                        description=f"**{BASE_NATION}** 국민으로 확인되었습니다!",
+                        color=0x00ff00
+                    )
+                else:
+                    embed = discord.Embed(
+                        title="⚠️ 다른 국가 소속",
+                        description=f"**{nation}** 국가에 소속되어 있습니다.",
+                        color=0xff9900
+                    )
+
+                # 마인크래프트 정보
+                embed.add_field(
+                    name="🎮 마인크래프트 정보",
+                    value=f"**닉네임:** {mc_id}\n**마을:** {town}\n**국가:** {nation}",
+                    inline=False
+                )
+
+                # 변경 사항
+                if role_changes:
+                    changes_text = "\n".join(role_changes[:10])  # 최대 10개
+                    embed.add_field(
+                        name="🔄 변경 사항",
+                        value=changes_text,
+                        inline=False
+                    )
+
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                print(f"🏁 /확인 처리 완료 - {member.display_name}: {nation}/{town}")
+            else:
+                # 처리 실패
+                error_msg = result.get('error', '알 수 없는 오류') if result else '처리 실패'
+                await interaction.followup.send(
+                    embed=discord.Embed(
+                        title="❌ 확인 실패",
+                        description=f"{error_msg}",
+                        color=0xff0000
+                    ),
+                    ephemeral=True
+                )
+                print(f"❌ /확인 처리 실패 - {member.display_name}: {error_msg}")
 
         except Exception as e:
             print(f"💥 /확인 예외 발생: {e}")
