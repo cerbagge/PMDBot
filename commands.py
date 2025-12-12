@@ -1235,6 +1235,8 @@ class SlashCommands(commands.Cog):
         discord_id = member.id
         nickname_updated = False
         nickname_error = None
+        mc_id = None
+        nation = None
 
         try:
             # API를 통해 마크 ID와 국가 정보 조회
@@ -1308,28 +1310,64 @@ class SlashCommands(commands.Cog):
         # 결과 메시지 생성
         embed = discord.Embed(
             title="✅ 콜사인 설정 완료",
-            description=message,
+            description=f"콜사인이 **{텍스트}**로 설정되었습니다.",
             color=0x00ff00
         )
 
+        # 쿨타임 정보
+        embed.add_field(
+            name="⏰ 쿨타임 적용",
+            value="15일 후에 다시 변경할 수 있습니다.",
+            inline=False
+        )
+
+        # 닉네임 변경 결과
         if nickname_updated:
-            embed.add_field(
-                name="🎉 닉네임 변경 완료",
-                value=f"디스코드 닉네임이 ``{텍스트}`` 콜사인으로 변경되었습니다!",
-                inline=False
-            )
+            if mc_id:
+                new_nickname = f"{mc_id} ㅣ {텍스트}"
+                embed.add_field(
+                    name="🔄 닉네임 변경",
+                    value=f"• 닉네임이 **``{new_nickname}``**로 즉시 변경됨",
+                    inline=False
+                )
+                embed.add_field(
+                    name="💡 안내",
+                    value=f"• {BASE_NATION} 국민이므로 콜사인이 즉시 적용되었습니다.\n• 마인크래프트 정보가 변경되면 `/확인` 명령어를 사용하세요.",
+                    inline=False
+                )
+                embed.add_field(
+                    name="🏷️ 적용된 닉네임 형식",
+                    value=f"**형식:** `{mc_id} ㅣ {텍스트}`",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="🔄 닉네임 변경",
+                    value=f"• 닉네임이 **``{텍스트}``** 콜사인으로 즉시 변경됨",
+                    inline=False
+                )
+                embed.add_field(
+                    name="💡 안내",
+                    value=f"• {BASE_NATION} 국민이므로 콜사인이 즉시 적용되었습니다.\n• 마인크래프트 정보가 변경되면 `/확인` 명령어를 사용하세요.",
+                    inline=False
+                )
         elif nickname_error:
             embed.add_field(
                 name="⚠️ 닉네임 변경 실패",
                 value=f"{nickname_error}\n`/확인` 명령어를 사용하여 수동으로 적용해주세요.",
                 inline=False
             )
-
-        embed.add_field(
-            name="ℹ️ 안내",
-            value="다음 변경은 15일 후에 가능합니다.",
-            inline=False
-        )
+            embed.add_field(
+                name="ℹ️ 안내",
+                value="다음 변경은 15일 후에 가능합니다.",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="ℹ️ 안내",
+                value="다음 변경은 15일 후에 가능합니다.",
+                inline=False
+            )
 
         await interaction.followup.send(embed=embed, ephemeral=True)
     
