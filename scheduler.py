@@ -183,7 +183,7 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
                         mapped_role = guild.get_role(mapped_role_id)
                         if mapped_role and mapped_role in member.roles:
                             await member.remove_roles(mapped_role)
-                            changes.append(f"• **`{mapped_town}`** 마을 역할 제거됨 (마을 변경)")
+                            changes.append(f"• **{mapped_town}** 마을 역할 제거됨 (마을 변경)")
                             print(f"  ✅ 이전 마을 역할 제거: {mapped_town}")
 
                 # 2. 새 마을 역할 부여 (무소속이 아닌 경우)
@@ -194,7 +194,7 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
                         if town_role:
                             if town_role not in member.roles:
                                 await member.add_roles(town_role)
-                                changes.append(f"• **`{town}`** 마을 역할 추가됨")
+                                changes.append(f"• **{town}** 마을 역할 추가됨")
                                 print(f"  ✅ 매핑된 마을 역할 부여: {town}")
                             else:
                                 print(f"  ℹ️ 이미 마을 역할 보유: {town}")
@@ -1488,7 +1488,7 @@ async def process_single_user(bot, session, user_id):
         
         embed.add_field(
             name="👤 사용자 정보",
-            value=f"**Discord:** ``{member.mention}``\n**닉네임:** ``{member.display_name}``",
+            value=f"**Discord:** {member.mention}\n**닉네임:** ``{member.display_name}``",
             inline=False
         )
         
@@ -1530,19 +1530,19 @@ async def process_single_user(bot, session, user_id):
                 if town_role:
                     embed.add_field(
                         name="🏘️ 마을 역할",
-                        value=f"**``{town}``** → {town_role.mention}",
+                        value=f"**{town}** → {town_role.mention}",
                         inline=False
                     )
                 else:
                     embed.add_field(
                         name="🏘️ 마을 역할",
-                        value=f"**``{town}``** → ⚠️ 역할 없음 (ID: {role_id})",
+                        value=f"**{town}** → ⚠️ 역할 없음 (ID: {role_id})",
                         inline=False
                     )
             else:
                 embed.add_field(
                     name="🏘️ 마을 역할",
-                    value=f"**``{town}``** → ℹ️ 역할 연동 안됨",
+                    value=f"**{town}** → ℹ️ 역할 연동 안됨",
                     inline=False
                 )
         
@@ -1626,7 +1626,7 @@ async def process_single_user(bot, session, user_id):
                             mapped_role = guild.get_role(mapped_role_id)
                             if mapped_role and mapped_role in member.roles:
                                 await member.remove_roles(mapped_role)
-                                role_removal_changes.append(f"• **`{mapped_town}`** 마을 역할 제거됨")
+                                role_removal_changes.append(f"• **{mapped_town}** 마을 역할 제거됨")
                                 print(f"  ✅ 마을 역할 제거: {mapped_town}")
                     except Exception as role_error:
                         print(f"  ⚠️ 마을 역할 제거 실패: {role_error}")
