@@ -7,6 +7,8 @@ import os
 import json
 import time
 import datetime
+import socket
+import struct
 
 # 안전한 import 처리
 try:
@@ -182,6 +184,136 @@ async def get_towns_in_nation(nation_name: str):
         print(f"❌ 대체 함수에서 오류: {e}")
         # 최후의 대체 마을 목록
         return ["Seoul", "Busan", "Incheon", "Daegu", "Daejeon", "Gwangju", "Ulsan"]
+
+# ========== 서버 대기열 확인 기능 ==========
+class ServerQueueChecker:
+    """마인크래프트 서버 대기열 확인 클래스"""
+
+    def __init__(self, mc_host: str, mc_port: int, dynmap_url: str):
+        self.mc_host = mc_host
+        self.mc_port = mc_port
+        self.dynmap_url = dynmap_url.rstrip('/')
+
+    @staticmethod
+    def unpack_varint(sock):
+        data = 0
+        for i in range(5):
+            ordinal = sock.recv(1)
+            if len(ordinal) == 0:
+                break
+            byte = ord(ordinal)
+            data |= (byte & 0x7F) << 7*i
+            if not byte & 0x80:
+                break
+        return data
+
+    @staticmethod
+    def pack_varint(data):
+        ordinal = b''
+        while True:
+            byte = data & 0x7F
+            data >>= 7
+            ordinal += struct.pack('B', byte | (0x80 if data > 0 else 0))
+            if data == 0:
+                break
+        return ordinal
+
+    @staticmethod
+    def pack_data(data):
+        if isinstance(data, str):
+            data = data.encode('utf-8')
+        return ServerQueueChecker.pack_varint(len(data)) + data
+
+    @staticmethod
+    def pack_port(port):
+        return struct.pack('>H', port)
+
+    def get_minecraft_status(self):
+        """마인크래프트 서버 상태 조회 (동기)"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect((self.mc_host, self.mc_port))
+
+            handshake = b'\x00'
+            handshake += self.pack_varint(47)
+            handshake += self.pack_data(self.mc_host)
+            handshake += self.pack_port(self.mc_port)
+            handshake += self.pack_varint(1)
+
+            sock.send(self.pack_data(handshake))
+            sock.send(self.pack_data(b'\x00'))
+
+            pack_len = self.unpack_varint(sock)
+            pack_id = self.unpack_varint(sock)
+
+            if pack_id == -1:
+                raise ConnectionError("서버 응답 없음")
+
+            data_len = self.unpack_varint(sock)
+            data = b''
+            while len(data) < data_len:
+                chunk = sock.recv(data_len - len(data))
+                if not chunk:
+                    raise EOFError("연결 종료")
+                data += chunk
+
+            sock.close()
+
+            response = json.loads(data.decode('utf-8'))
+            return response
+
+        except Exception as e:
+            print(f"MC 서버 조회 실패: {e}")
+            return None
+
+    def get_mc_player_count(self):
+        """마인크래프트 서버 전체 플레이어 수"""
+        status = self.get_minecraft_status()
+        if not status:
+            return -1
+
+        players = status.get('players', {})
+        return players.get('online', 0)
+
+    async def get_dynmap_players(self, world: str = "world"):
+        """Dynmap 게임 내 플레이어 수"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                # 설정 정보
+                config_url = f"{self.dynmap_url}/up/configuration"
+                async with session.get(config_url, timeout=5) as response:
+                    response.raise_for_status()
+                    config = await response.json()
+
+                worlds = config.get('worlds', [])
+                if worlds and not world:
+                    world = worlds[0].get('name', 'world')
+
+                # 월드 업데이트
+                update_url = f"{self.dynmap_url}/up/world/{world}/0"
+                async with session.get(update_url, timeout=5) as response:
+                    response.raise_for_status()
+                    update = await response.json()
+
+                players = update.get('players', [])
+                return len(players)
+
+        except Exception as e:
+            print(f"Dynmap 조회 실패: {e}")
+            return -1
+
+    async def get_queue_info(self):
+        """대기열 정보 계산 - (전체, 게임내, 대기열)"""
+        mc_total = self.get_mc_player_count()
+        dynmap_ingame = await self.get_dynmap_players()
+
+        if mc_total == -1 or dynmap_ingame == -1:
+            return (-1, -1, -1)
+
+        queue_count = max(0, mc_total - dynmap_ingame)
+
+        return (mc_total, dynmap_ingame, queue_count)
 
 # 환경변수 로드 - 기본값 설정
 MC_API_BASE = os.getenv("MC_API_BASE", "https://api.planetearth.kr")
@@ -4459,6 +4591,138 @@ class SlashCommands(commands.Cog):
                     await interaction.response.send_message(f"❗ 오류 발생: `{str(error)}`", ephemeral=True)
             except:
                 print(f"Error response failed: {error}")
+
+    @app_commands.command(name="서버대기열", description="서버 접속 대기열 인원을 확인합니다")
+    async def 서버대기열(self, interaction: discord.Interaction):
+        """서버 대기열 확인 슬래시 커맨드"""
+        await interaction.response.defer()
+
+        try:
+            # ServerQueueChecker 인스턴스 생성
+            checker = ServerQueueChecker(
+                mc_host="planetearth.kr",
+                mc_port=25565,
+                dynmap_url="https://map.planetearth.kr"
+            )
+
+            mc_total, ingame, queue = await checker.get_queue_info()
+
+            if mc_total == -1:
+                embed = discord.Embed(
+                    title="❌ 서버 오류",
+                    description="서버 상태를 확인할 수 없습니다.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.datetime.now()
+                )
+                await interaction.followup.send(embed=embed)
+                return
+
+            # 대기열 상태에 따른 색상
+            if queue == 0:
+                color = discord.Color.green()
+                status_emoji = "✅"
+                status_text = "대기열 없음 - 바로 입장 가능!"
+            elif queue < 10:
+                color = discord.Color.yellow()
+                status_emoji = "⏳"
+                status_text = f"{queue}명이 입장 대기 중"
+            else:
+                color = discord.Color.red()
+                status_emoji = "⚠️"
+                status_text = f"{queue}명이 입장 대기 중 - 대기 시간이 길 수 있습니다"
+
+            embed = discord.Embed(
+                title="🌍 PlanetEarth 서버 대기열",
+                description=f"{status_emoji} **{status_text}**",
+                color=color,
+                timestamp=datetime.datetime.now()
+            )
+
+            # 서버 정보
+            embed.add_field(
+                name="📊 서버 연결 인원",
+                value=f"**{mc_total}명**",
+                inline=True
+            )
+
+            embed.add_field(
+                name="🎮 게임 내 플레이어",
+                value=f"**{ingame}명**",
+                inline=True
+            )
+
+            embed.add_field(
+                name="⏳ 대기열",
+                value=f"**{queue}명**",
+                inline=True
+            )
+
+            # 진행 바 표시
+            if mc_total > 0:
+                ingame_percent = int((ingame / mc_total) * 100)
+                queue_percent = int((queue / mc_total) * 100)
+
+                # 간단한 진행 바
+                bar_length = 20
+                ingame_blocks = int((ingame / mc_total) * bar_length)
+                queue_blocks = bar_length - ingame_blocks
+
+                progress_bar = "🟩" * ingame_blocks + "🟨" * queue_blocks
+
+                embed.add_field(
+                    name="📈 비율",
+                    value=f"{progress_bar}\n게임 내: {ingame_percent}% | 대기: {queue_percent}%",
+                    inline=False
+                )
+
+            embed.set_footer(text="서버: planetearth.kr")
+
+            await interaction.followup.send(embed=embed)
+
+        except Exception as e:
+            embed = discord.Embed(
+                title="❌ 오류",
+                description=f"대기열 정보를 가져오는 중 오류가 발생했습니다:\n```{str(e)[:100]}```",
+                color=discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed)
+
+    @commands.command(name="서버대기")
+    async def 서버대기_텍스트(self, ctx):
+        """간단한 대기열 확인 (텍스트 명령어)"""
+        try:
+            checker = ServerQueueChecker(
+                mc_host="planetearth.kr",
+                mc_port=25565,
+                dynmap_url="https://map.planetearth.kr"
+            )
+
+            mc_total, ingame, queue = await checker.get_queue_info()
+
+            if mc_total == -1:
+                await ctx.send("❌ 서버 상태를 확인할 수 없습니다.")
+                return
+
+            if queue == 0:
+                await ctx.send(f"✅ **대기열 없음!** (접속: {mc_total}명, 게임 내: {ingame}명)")
+            else:
+                await ctx.send(f"⏳ **대기열: {queue}명** (접속: {mc_total}명, 게임 내: {ingame}명)")
+
+        except Exception as e:
+            await ctx.send(f"❌ 오류: {str(e)[:100]}")
+
+    @서버대기열.error
+    async def 서버대기열_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """서버대기열 명령어 에러 처리"""
+        embed = discord.Embed(
+            title="❌ 오류 발생",
+            description=f"서버 대기열 확인 중 오류가 발생했습니다.\n```{str(error)[:100]}```",
+            color=discord.Color.red()
+        )
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(SlashCommands(bot))
