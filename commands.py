@@ -230,10 +230,14 @@ class ServerQueueChecker:
 
     def get_minecraft_status(self):
         """마인크래프트 서버 상태 조회 (동기)"""
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
+            sock.settimeout(10)  # 타임아웃 10초로 증가
+
+            print(f"🔌 서버 연결 시도: {self.mc_host}:{self.mc_port}")
             sock.connect((self.mc_host, self.mc_port))
+            print(f"✅ 서버 연결 성공")
 
             handshake = b'\x00'
             handshake += self.pack_varint(47)
@@ -253,19 +257,27 @@ class ServerQueueChecker:
             data_len = self.unpack_varint(sock)
             data = b''
             while len(data) < data_len:
-                chunk = sock.recv(data_len - len(data))
+                chunk = sock.recv(min(4096, data_len - len(data)))
                 if not chunk:
                     raise EOFError("연결 종료")
                 data += chunk
 
-            sock.close()
-
             response = json.loads(data.decode('utf-8'))
+            print(f"✅ 서버 상태 조회 성공: {response.get('players', {}).get('online', 0)}명 온라인")
             return response
 
-        except Exception as e:
-            print(f"MC 서버 조회 실패: {e}")
+        except socket.timeout:
+            print(f"⏰ MC 서버 연결 타임아웃: {self.mc_host}:{self.mc_port}")
             return None
+        except Exception as e:
+            print(f"❌ MC 서버 조회 실패: {e}")
+            return None
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except:
+                    pass
 
     def get_mc_player_count(self):
         """마인크래프트 서버 전체 플레이어 수"""
@@ -276,28 +288,45 @@ class ServerQueueChecker:
         players = status.get('players', {})
         return players.get('online', 0)
 
-    async def get_dynmap_players(self, world: str = "world"):
+    async def get_dynmap_players(self, world: str = "earth"):
         """Dynmap 게임 내 플레이어 수"""
         try:
             async with aiohttp.ClientSession() as session:
-                # 설정 정보
-                config_url = f"{self.dynmap_url}/up/configuration"
-                async with session.get(config_url, timeout=5) as response:
-                    response.raise_for_status()
-                    config = await response.json()
+                # 여러 경로 시도
+                possible_paths = [
+                    f"/up/world/{world}/",
+                    f"/up/world/{world}/0",
+                    f"/tiles/_markers_/marker_earth.json",
+                    f"/standalone/MySQL_markers.php?marker=_markers_/marker_{world}.json"
+                ]
 
-                worlds = config.get('worlds', [])
-                if worlds and not world:
-                    world = worlds[0].get('name', 'world')
+                for path in possible_paths:
+                    try:
+                        update_url = f"{self.dynmap_url}{path}"
+                        async with session.get(update_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                            if response.status == 200:
+                                content_type = response.headers.get('Content-Type', '')
 
-                # 월드 업데이트
-                update_url = f"{self.dynmap_url}/up/world/{world}/0"
-                async with session.get(update_url, timeout=5) as response:
-                    response.raise_for_status()
-                    update = await response.json()
+                                # JSON 응답인 경우
+                                if 'json' in content_type:
+                                    update = await response.json()
 
-                players = update.get('players', [])
-                return len(players)
+                                    # 플레이어 목록 찾기
+                                    if 'players' in update:
+                                        return len(update['players'])
+                                    elif 'sets' in update:
+                                        # marker 형식
+                                        for set_name, set_data in update.get('sets', {}).items():
+                                            if 'markers' in set_data:
+                                                return len(set_data['markers'])
+
+                                print(f"  ℹ️ {path}: JSON이 아니거나 플레이어 정보 없음")
+                    except Exception as e:
+                        print(f"  ⚠️ {path} 실패: {e}")
+                        continue
+
+                print(f"❌ 모든 Dynmap 경로 실패")
+                return -1
 
         except Exception as e:
             print(f"Dynmap 조회 실패: {e}")
