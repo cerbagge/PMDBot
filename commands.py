@@ -288,48 +288,63 @@ class ServerQueueChecker:
         players = status.get('players', {})
         return players.get('online', 0)
 
-    async def get_dynmap_players(self, world: str = "earth"):
+    async def get_dynmap_players(self, world: str = "world"):
         """Dynmap 게임 내 플레이어 수"""
         try:
             async with aiohttp.ClientSession() as session:
-                # 여러 경로 시도
+                # 여러 경로 시도 (일반적인 Dynmap API 경로들)
                 possible_paths = [
                     f"/up/world/{world}/",
-                    f"/up/world/{world}/0",
+                    f"/standalone/dynmap_world.php",
+                    f"/standalone/MySQL_markers.php",
+                    f"/tiles/_markers_/marker_{world}.json",
                     f"/tiles/_markers_/marker_earth.json",
-                    f"/standalone/MySQL_markers.php?marker=_markers_/marker_{world}.json"
                 ]
 
                 for path in possible_paths:
                     try:
                         update_url = f"{self.dynmap_url}{path}"
+                        print(f"  🔍 시도: {update_url}")
+
                         async with session.get(update_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
                             if response.status == 200:
                                 content_type = response.headers.get('Content-Type', '')
+                                print(f"  ✅ 응답 성공 (Content-Type: {content_type})")
 
-                                # JSON 응답인 경우
-                                if 'json' in content_type:
+                                # JSON 응답 시도
+                                try:
                                     update = await response.json()
 
-                                    # 플레이어 목록 찾기
+                                    # 플레이어 목록 찾기 (여러 형식 지원)
                                     if 'players' in update:
-                                        return len(update['players'])
+                                        player_count = len(update['players'])
+                                        print(f"  ✅ 플레이어 {player_count}명 발견 (players)")
+                                        return player_count
+
                                     elif 'sets' in update:
                                         # marker 형식
                                         for set_name, set_data in update.get('sets', {}).items():
                                             if 'markers' in set_data:
-                                                return len(set_data['markers'])
+                                                player_count = len(set_data['markers'])
+                                                print(f"  ✅ 플레이어 {player_count}명 발견 (sets/markers)")
+                                                return player_count
 
-                                print(f"  ℹ️ {path}: JSON이 아니거나 플레이어 정보 없음")
+                                    print(f"  ℹ️ JSON이지만 플레이어 정보 없음: {list(update.keys())[:5]}")
+
+                                except json.JSONDecodeError:
+                                    print(f"  ⚠️ JSON 파싱 실패 (Content-Type: {content_type})")
+                            else:
+                                print(f"  ❌ HTTP {response.status}")
+
                     except Exception as e:
-                        print(f"  ⚠️ {path} 실패: {e}")
+                        print(f"  ⚠️ 오류: {e}")
                         continue
 
-                print(f"❌ 모든 Dynmap 경로 실패")
+                print(f"❌ 모든 Dynmap 경로 실패 - API를 사용할 수 없습니다")
                 return -1
 
         except Exception as e:
-            print(f"Dynmap 조회 실패: {e}")
+            print(f"❌ Dynmap 조회 실패: {e}")
             return -1
 
     async def get_queue_info(self):
