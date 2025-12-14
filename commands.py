@@ -352,6 +352,13 @@ class ServerQueueChecker:
         mc_total = self.get_mc_player_count()
         dynmap_ingame = await self.get_dynmap_players()
 
+        # MC 서버 연결 실패했지만 Dynmap은 성공한 경우
+        if mc_total == -1 and dynmap_ingame != -1:
+            print(f"ℹ️ MC 서버 연결 실패, Dynmap 데이터만 사용: {dynmap_ingame}명")
+            # Dynmap 플레이어 수를 전체 및 게임 내로 사용 (대기열 0)
+            return (dynmap_ingame, dynmap_ingame, 0)
+
+        # 둘 다 실패한 경우
         if mc_total == -1 or dynmap_ingame == -1:
             return (-1, -1, -1)
 
