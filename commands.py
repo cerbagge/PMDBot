@@ -7,8 +7,6 @@ import os
 import json
 import time
 import datetime
-import socket
-import struct
 
 # 안전한 import 처리
 try:
@@ -194,94 +192,38 @@ class ServerQueueChecker:
         self.mc_port = mc_port
         self.dynmap_url = dynmap_url.rstrip('/')
 
-    @staticmethod
-    def unpack_varint(sock):
-        data = 0
-        for i in range(5):
-            ordinal = sock.recv(1)
-            if len(ordinal) == 0:
-                break
-            byte = ord(ordinal)
-            data |= (byte & 0x7F) << 7*i
-            if not byte & 0x80:
-                break
-        return data
-
-    @staticmethod
-    def pack_varint(data):
-        ordinal = b''
-        while True:
-            byte = data & 0x7F
-            data >>= 7
-            ordinal += struct.pack('B', byte | (0x80 if data > 0 else 0))
-            if data == 0:
-                break
-        return ordinal
-
-    @staticmethod
-    def pack_data(data):
-        if isinstance(data, str):
-            data = data.encode('utf-8')
-        return ServerQueueChecker.pack_varint(len(data)) + data
-
-    @staticmethod
-    def pack_port(port):
-        return struct.pack('>H', port)
-
-    def get_minecraft_status(self):
-        """마인크래프트 서버 상태 조회 (동기)"""
-        sock = None
+    async def get_minecraft_status(self):
+        """마인크래프트 서버 상태 조회 (mcsrvstat.us API 사용)"""
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(10)  # 타임아웃 10초로 증가
+            print(f"🔌 서버 상태 조회 시도: {self.mc_host}:{self.mc_port}")
 
-            print(f"🔌 서버 연결 시도: {self.mc_host}:{self.mc_port}")
-            sock.connect((self.mc_host, self.mc_port))
-            print(f"✅ 서버 연결 성공")
+            # mcsrvstat.us API 사용
+            api_url = f"https://api.mcsrvstat.us/3/{self.mc_host}:{self.mc_port}"
 
-            handshake = b'\x00'
-            handshake += self.pack_varint(47)
-            handshake += self.pack_data(self.mc_host)
-            handshake += self.pack_port(self.mc_port)
-            handshake += self.pack_varint(1)
+            async with aiohttp.ClientSession() as session:
+                headers = {'User-Agent': 'Discord-Bot-PlanetEarth/1.0'}
+                async with session.get(api_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status == 200:
+                        data = await response.json()
 
-            sock.send(self.pack_data(handshake))
-            sock.send(self.pack_data(b'\x00'))
+                        if data.get('online'):
+                            player_count = data.get('players', {}).get('online', 0)
+                            print(f"✅ 서버 온라인: {player_count}명")
+                            return data
+                        else:
+                            print(f"❌ 서버 오프라인")
+                            return None
+                    else:
+                        print(f"❌ API 응답 오류: HTTP {response.status}")
+                        return None
 
-            pack_len = self.unpack_varint(sock)
-            pack_id = self.unpack_varint(sock)
-
-            if pack_id == -1:
-                raise ConnectionError("서버 응답 없음")
-
-            data_len = self.unpack_varint(sock)
-            data = b''
-            while len(data) < data_len:
-                chunk = sock.recv(min(4096, data_len - len(data)))
-                if not chunk:
-                    raise EOFError("연결 종료")
-                data += chunk
-
-            response = json.loads(data.decode('utf-8'))
-            print(f"✅ 서버 상태 조회 성공: {response.get('players', {}).get('online', 0)}명 온라인")
-            return response
-
-        except socket.timeout:
-            print(f"⏰ MC 서버 연결 타임아웃: {self.mc_host}:{self.mc_port}")
-            return None
         except Exception as e:
             print(f"❌ MC 서버 조회 실패: {e}")
             return None
-        finally:
-            if sock:
-                try:
-                    sock.close()
-                except:
-                    pass
 
-    def get_mc_player_count(self):
+    async def get_mc_player_count(self):
         """마인크래프트 서버 전체 플레이어 수"""
-        status = self.get_minecraft_status()
+        status = await self.get_minecraft_status()
         if not status:
             return -1
 
@@ -349,7 +291,7 @@ class ServerQueueChecker:
 
     async def get_queue_info(self):
         """대기열 정보 계산 - (전체, 게임내, 대기열)"""
-        mc_total = self.get_mc_player_count()
+        mc_total = await self.get_mc_player_count()
         dynmap_ingame = await self.get_dynmap_players()
 
         # MC 서버 연결 실패했지만 Dynmap은 성공한 경우
