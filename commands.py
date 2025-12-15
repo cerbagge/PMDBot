@@ -193,12 +193,12 @@ class ServerQueueChecker:
         self.dynmap_url = dynmap_url.rstrip('/')
 
     async def get_minecraft_status(self):
-        """마인크래프트 서버 상태 조회 (mcsrvstat.us API 사용)"""
+        """마인크래프트 서버 상태 조회 (mcapi.us API 사용)"""
         try:
-            print(f"🔌 서버 상태 조회 시도: {self.mc_host}:{self.mc_port}")
+            print(f"🔌 서버 상태 조회 시도: {self.mc_host}")
 
-            # mcsrvstat.us API 사용
-            api_url = f"https://api.mcsrvstat.us/3/{self.mc_host}:{self.mc_port}"
+            # mcapi.us API 사용 (더 정확하고 안정적)
+            api_url = f"https://mcapi.us/server/status?ip={self.mc_host}"
 
             async with aiohttp.ClientSession() as session:
                 headers = {'User-Agent': 'Discord-Bot-PlanetEarth/1.0'}
@@ -207,8 +207,8 @@ class ServerQueueChecker:
                         data = await response.json()
 
                         if data.get('online'):
-                            player_count = data.get('players', {}).get('online', 0)
-                            print(f"✅ 서버 온라인: {player_count}명")
+                            player_count = data.get('players', {}).get('now', 0)
+                            print(f"✅ 서버 온라인: {player_count}명 (mcapi.us)")
                             return data
                         else:
                             print(f"❌ 서버 오프라인")
@@ -228,69 +228,93 @@ class ServerQueueChecker:
             return -1
 
         players = status.get('players', {})
-        return players.get('online', 0)
+        return players.get('now', 0)
 
     async def get_dynmap_players(self, world: str = "world"):
-        """Dynmap 게임 내 플레이어 수"""
+        """Dynmap 전체 플레이어 수 (로비 + 게임 내 모두 포함)"""
         try:
             async with aiohttp.ClientSession() as session:
-                # 여러 경로 시도 (일반적인 Dynmap API 경로들)
-                possible_paths = [
-                    f"/up/world/{world}/",
-                    f"/standalone/dynmap_world.php",
-                    f"/standalone/MySQL_markers.php",
-                    f"/tiles/_markers_/marker_{world}.json",
-                    f"/tiles/_markers_/marker_earth.json",
-                ]
+                # Dynmap API URL (베이스 URL 자체를 요청)
+                dynmap_api_url = f"{self.dynmap_url}/up/world/{world}/"
+                print(f"  🔍 Dynmap 조회: {dynmap_api_url}")
 
-                for path in possible_paths:
-                    try:
-                        update_url = f"{self.dynmap_url}{path}"
-                        print(f"  🔍 시도: {update_url}")
+                async with session.get(dynmap_api_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status == 200:
+                        try:
+                            # text/plain으로 응답하므로 먼저 텍스트로 읽은 후 JSON 파싱
+                            text = await response.text()
+                            data = json.loads(text)
 
-                        async with session.get(update_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                            if response.status == 200:
-                                content_type = response.headers.get('Content-Type', '')
-                                print(f"  ✅ 응답 성공 (Content-Type: {content_type})")
+                            # 전체 연결 수
+                            total_connections = data.get('currentcount', 0)
 
-                                # JSON 응답 시도
-                                try:
-                                    update = await response.json()
+                            # 플레이어 목록
+                            players = data.get('players', [])
 
-                                    # 플레이어 목록 찾기 (여러 형식 지원)
-                                    if 'players' in update:
-                                        player_count = len(update['players'])
-                                        print(f"  ✅ 플레이어 {player_count}명 발견 (players)")
-                                        return player_count
+                            # 전체 플레이어 수 (로비 + 게임 내 모두 포함)
+                            total_count = len(players)
 
-                                    elif 'sets' in update:
-                                        # marker 형식
-                                        for set_name, set_data in update.get('sets', {}).items():
-                                            if 'markers' in set_data:
-                                                player_count = len(set_data['markers'])
-                                                print(f"  ✅ 플레이어 {player_count}명 발견 (sets/markers)")
-                                                return player_count
+                            print(f"  ✅ Dynmap 플레이어: 전체 {total_count}명 (currentcount: {total_connections}명)")
 
-                                    print(f"  ℹ️ JSON이지만 플레이어 정보 없음: {list(update.keys())[:5]}")
+                            # 전체 플레이어 수 반환 (로비 + 게임 내)
+                            return total_count
 
-                                except json.JSONDecodeError:
-                                    print(f"  ⚠️ JSON 파싱 실패 (Content-Type: {content_type})")
-                            else:
-                                print(f"  ❌ HTTP {response.status}")
-
-                    except Exception as e:
-                        print(f"  ⚠️ 오류: {e}")
-                        continue
-
-                print(f"❌ 모든 Dynmap 경로 실패 - API를 사용할 수 없습니다")
-                return -1
+                        except json.JSONDecodeError as e:
+                            print(f"  ❌ JSON 파싱 실패: {e}")
+                            return -1
+                        except Exception as e:
+                            print(f"  ❌ 데이터 처리 실패: {e}")
+                            return -1
+                    else:
+                        print(f"  ❌ HTTP {response.status}")
+                        return -1
 
         except Exception as e:
             print(f"❌ Dynmap 조회 실패: {e}")
             return -1
 
+    async def get_dynmap_lobby_players(self, world: str = "world"):
+        """Dynmap 로비 플레이어 수 (대기열에 있는 플레이어만)"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Dynmap API URL (베이스 URL 자체를 요청)
+                dynmap_api_url = f"{self.dynmap_url}/up/world/{world}/"
+
+                async with session.get(dynmap_api_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status == 200:
+                        try:
+                            # text/plain으로 응답하므로 먼저 텍스트로 읽은 후 JSON 파싱
+                            text = await response.text()
+                            data = json.loads(text)
+
+                            # 플레이어 목록
+                            players = data.get('players', [])
+
+                            # 로비에 있는 플레이어만 (world == "-some-other-bogus-world-")
+                            lobby_players = [p for p in players if p.get('world') == '-some-other-bogus-world-']
+
+                            lobby_count = len(lobby_players)
+                            print(f"  ✅ Dynmap 로비 플레이어: {lobby_count}명")
+
+                            # 로비 플레이어 수 반환
+                            return lobby_count
+
+                        except json.JSONDecodeError as e:
+                            print(f"  ❌ JSON 파싱 실패: {e}")
+                            return -1
+                        except Exception as e:
+                            print(f"  ❌ 데이터 처리 실패: {e}")
+                            return -1
+                    else:
+                        print(f"  ❌ HTTP {response.status}")
+                        return -1
+
+        except Exception as e:
+            print(f"❌ Dynmap 로비 조회 실패: {e}")
+            return -1
+
     async def get_queue_info(self):
-        """대기열 정보 계산 - (전체, 게임내, 대기열)"""
+        """대기열 정보 계산 - (API 인원, Dynmap 인원, 게임내, 대기열)"""
         mc_total = await self.get_mc_player_count()
         dynmap_ingame = await self.get_dynmap_players()
 
@@ -298,15 +322,21 @@ class ServerQueueChecker:
         if mc_total == -1 and dynmap_ingame != -1:
             print(f"ℹ️ MC 서버 연결 실패, Dynmap 데이터만 사용: {dynmap_ingame}명")
             # Dynmap 플레이어 수를 전체 및 게임 내로 사용 (대기열 0)
-            return (dynmap_ingame, dynmap_ingame, 0)
+            return (-1, dynmap_ingame, dynmap_ingame, 0)
 
         # 둘 다 실패한 경우
         if mc_total == -1 or dynmap_ingame == -1:
-            return (-1, -1, -1)
+            return (-1, -1, -1, -1)
 
-        queue_count = max(0, mc_total - dynmap_ingame)
+        # 350명 이하일 경우 대기열 없음으로 처리
+        if dynmap_ingame <= 350:
+            queue_count = 0
+            print(f"ℹ️ 게임 내 인원 {dynmap_ingame}명 (350명 이하) - 대기열 없음")
+        else:
+            queue_count = max(0, mc_total - dynmap_ingame)
+            print(f"ℹ️ 대기열 계산: {mc_total} - {dynmap_ingame} = {queue_count}명")
 
-        return (mc_total, dynmap_ingame, queue_count)
+        return (mc_total, dynmap_ingame, dynmap_ingame, queue_count)
 
 # 환경변수 로드 - 기본값 설정
 MC_API_BASE = os.getenv("MC_API_BASE", "https://api.planetearth.kr")
@@ -4598,9 +4628,9 @@ class SlashCommands(commands.Cog):
                 dynmap_url="https://map.planetearth.kr"
             )
 
-            mc_total, ingame, queue = await checker.get_queue_info()
+            api_total, dynmap_total, ingame, queue = await checker.get_queue_info()
 
-            if mc_total == -1:
+            if api_total == -1 and dynmap_total == -1:
                 embed = discord.Embed(
                     title="❌ 서버 오류",
                     description="서버 상태를 확인할 수 없습니다.",
@@ -4631,16 +4661,17 @@ class SlashCommands(commands.Cog):
                 timestamp=datetime.datetime.now()
             )
 
-            # 서버 정보
-            embed.add_field(
-                name="📊 서버 연결 인원",
-                value=f"**{mc_total}명**",
-                inline=True
-            )
+            # 서버 정보 - API와 Dynmap 수치 모두 표시
+            if api_total != -1:
+                embed.add_field(
+                    name="📊 서버 연결 인원 (API)",
+                    value=f"**{api_total}명**",
+                    inline=True
+                )
 
             embed.add_field(
-                name="🎮 게임 내 플레이어",
-                value=f"**{ingame}명**",
+                name="🗺️ Dynmap 플레이어",
+                value=f"**{dynmap_total}명**",
                 inline=True
             )
 
@@ -4650,23 +4681,27 @@ class SlashCommands(commands.Cog):
                 inline=True
             )
 
-            # 진행 바 표시
-            if mc_total > 0:
-                ingame_percent = int((ingame / mc_total) * 100)
-                queue_percent = int((queue / mc_total) * 100)
+            # 진행 바 표시 (Dynmap 기준)
+            if dynmap_total > 0:
+                # API 데이터가 있으면 API 기준으로, 없으면 Dynmap 기준으로
+                total_for_bar = api_total if api_total != -1 else dynmap_total
 
-                # 간단한 진행 바
-                bar_length = 20
-                ingame_blocks = int((ingame / mc_total) * bar_length)
-                queue_blocks = bar_length - ingame_blocks
+                if total_for_bar > 0:
+                    ingame_percent = int((ingame / total_for_bar) * 100)
+                    queue_percent = int((queue / total_for_bar) * 100)
 
-                progress_bar = "🟩" * ingame_blocks + "🟨" * queue_blocks
+                    # 간단한 진행 바
+                    bar_length = 20
+                    ingame_blocks = int((ingame / total_for_bar) * bar_length)
+                    queue_blocks = bar_length - ingame_blocks
 
-                embed.add_field(
-                    name="📈 비율",
-                    value=f"{progress_bar}\n게임 내: {ingame_percent}% | 대기: {queue_percent}%",
-                    inline=False
-                )
+                    progress_bar = "🟩" * ingame_blocks + "🟨" * queue_blocks
+
+                    embed.add_field(
+                        name="📈 비율",
+                        value=f"{progress_bar}\n게임 내: {ingame_percent}% | 대기: {queue_percent}%",
+                        inline=False
+                    )
 
             embed.set_footer(text="서버: planetearth.kr")
 
@@ -4690,16 +4725,22 @@ class SlashCommands(commands.Cog):
                 dynmap_url="https://map.planetearth.kr"
             )
 
-            mc_total, ingame, queue = await checker.get_queue_info()
+            api_total, dynmap_total, ingame, queue = await checker.get_queue_info()
 
-            if mc_total == -1:
+            if api_total == -1 and dynmap_total == -1:
                 await ctx.send("❌ 서버 상태를 확인할 수 없습니다.")
                 return
 
+            # API와 Dynmap 수치 모두 표시
+            status_parts = []
+            if api_total != -1:
+                status_parts.append(f"API: {api_total}명")
+            status_parts.append(f"Dynmap: {dynmap_total}명")
+
             if queue == 0:
-                await ctx.send(f"✅ **대기열 없음!** (접속: {mc_total}명, 게임 내: {ingame}명)")
+                await ctx.send(f"✅ **대기열 없음!** ({', '.join(status_parts)})")
             else:
-                await ctx.send(f"⏳ **대기열: {queue}명** (접속: {mc_total}명, 게임 내: {ingame}명)")
+                await ctx.send(f"⏳ **대기열: {queue}명** ({', '.join(status_parts)})")
 
         except Exception as e:
             await ctx.send(f"❌ 오류: {str(e)[:100]}")
