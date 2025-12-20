@@ -290,27 +290,129 @@ async def on_ready():
     print("🚀 봇이 완전히 준비되었습니다!")
 
 @bot.event
+async def on_message(message):
+    """메시지 이벤트 처리 - &MF 명령어 감지 (특정 봇만)"""
+    try:
+        # &MF 명령어 확인
+        if message.content.startswith('&MF'):
+            # 허용된 봇 ID 목록
+            ALLOWED_BOT_IDS = [557628352828014614, 1325579039888511056]
+
+            # 허용된 봇이 아니면 무시
+            if message.author.id not in ALLOWED_BOT_IDS:
+                print(f"⚠️ &MF 명령어 무시: 허용되지 않은 사용자 {message.author.name} ({message.author.id})")
+                return
+
+            import re
+
+            # &MF 제거하고 나머지 텍스트 추출
+            content = message.content[3:].strip()
+
+            print(f"🔍 &MF 명령어 감지! (봇: {message.author.name})")
+            print(f"📝 원본 메시지: {message.content}")
+            print(f"📝 처리된 내용: {content}")
+
+            # 디스코드 ID 추출
+            # 1. 유저 멘션 형태 (<@123456789> 또는 <@!123456789>)
+            user_mention_match = re.search(r'<@!?(\d{15,20})>', content)
+            if user_mention_match:
+                discord_id = int(user_mention_match.group(1))
+                print(f"✅ 유저 멘션에서 ID 추출: {discord_id}")
+            else:
+                # 2. 숫자만 있는 경우
+                discord_id_match = re.search(r'(\d{15,20})', content)
+                if not discord_id_match:
+                    await message.channel.send("디스코드 ID를 찾을 수 없습니다. 사용법: `&MF 디스코드ID` 또는 `&MF @유저멘션`")
+                    return
+                discord_id = int(discord_id_match.group(1))
+                print(f"✅ 숫자에서 ID 추출: {discord_id}")
+
+            print(f"🎯 최종 Discord ID: {discord_id}")
+
+            # database_manager 로드
+            try:
+                from database_manager import db_manager
+            except ImportError:
+                await message.channel.send("데이터베이스 모듈을 로드할 수 없습니다.")
+                print("❌ database_manager 로드 실패")
+                return
+
+            # DB에서 유저 정보 조회
+            user_info = db_manager.get_user_info(discord_id)
+
+            if not user_info:
+                await message.channel.send(f"디스코드 ID `{discord_id}`에 해당하는 사용자를 찾을 수 없습니다.")
+                print(f"❌ DB에서 사용자 정보 없음: {discord_id}")
+                return
+
+            minecraft_name = user_info.get('current_minecraft_name')
+
+            if not minecraft_name:
+                await message.channel.send(f"사용자 `{discord_id}`의 마인크래프트 닉네임이 등록되지 않았습니다.")
+                print(f"❌ 마인크래프트 닉네임 없음: {discord_id}")
+                return
+
+            # 국가 정보 조회
+            nation_info = db_manager.get_current_nation(discord_id)
+
+            if not nation_info or not nation_info.get('nation_name'):
+                await message.channel.send(f"사용자 `{minecraft_name}`의 국가 정보를 찾을 수 없습니다.")
+                print(f"❌ 국가 정보 없음: {discord_id} ({minecraft_name})")
+                return
+
+            nation_name = nation_info['nation_name']
+            new_channel_name = f"{nation_name} 대사관"
+
+            # 현재 채널 이름 변경
+            try:
+                old_name = message.channel.name
+                await message.channel.edit(name=new_channel_name)
+                await message.channel.send(
+                    f"✅ 채널 이름이 변경되었습니다!\n"
+                    f"사용자: `{minecraft_name}` (Discord ID: `{discord_id}`)\n"
+                    f"국가: `{nation_name}`\n"
+                    f"변경: `{old_name}` → `{new_channel_name}`"
+                )
+                print(f"✅ 채널 이름 변경 성공: {old_name} -> {new_channel_name}")
+            except discord.Forbidden:
+                await message.channel.send("❌ 채널 이름을 변경할 권한이 없습니다.")
+                print(f"❌ 채널 이름 변경 권한 없음: {message.channel.name}")
+            except Exception as e:
+                await message.channel.send(f"❌ 채널 이름 변경 중 오류가 발생했습니다: {e}")
+                print(f"❌ 채널 이름 변경 오류: {e}")
+                import traceback
+                traceback.print_exc()
+
+    except Exception as e:
+        print(f"❌ on_message 이벤트 처리 중 오류: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # 다른 명령어도 처리할 수 있도록 process_commands 호출
+        await bot.process_commands(message)
+
+@bot.event
 async def on_member_join(member):
     """새로운 멤버가 서버에 들어올 때 자동으로 대기열에 추가"""
     try:
         print(f"👋 새 멤버 입장 감지: {member.display_name} ({member.id})")
-        
+
         # AUTO_ADD_NEW_MEMBERS 설정 확인 (기본값: True)
         auto_add_enabled = getattr(config, 'AUTO_ADD_NEW_MEMBERS', True)
         if not auto_add_enabled:
             print(f"⚠️ 자동 추가 비활성화 상태 - {member.display_name} 건너뜀")
             return
-        
+
         # queue_manager 로드
         try:
             from queue_manager import queue_manager
         except ImportError as e:
             print(f"❌ queue_manager 로드 실패: {e}")
             return
-        
+
         # 예외 사용자 확인 (두 가지 방법으로 확인)
         is_exception = False
-        
+
         # 방법 1: exception_manager 사용
         if exception_manager:
             try:
@@ -318,7 +420,7 @@ async def on_member_join(member):
                 print(f"🔍 exception_manager 확인: {member.display_name} -> 예외 사용자: {is_exception}")
             except Exception as e:
                 print(f"⚠️ exception_manager 확인 오류: {e}")
-        
+
         # 방법 2: scheduler의 is_exception_user 함수 사용 (fallback)
         if not is_exception and is_exception_user:
             try:
@@ -326,11 +428,11 @@ async def on_member_join(member):
                 print(f"🔍 scheduler 확인: {member.display_name} -> 예외 사용자: {is_exception}")
             except Exception as e:
                 print(f"⚠️ scheduler 예외 확인 오류: {e}")
-        
+
         # 예외 사용자 처리
         if is_exception:
             print(f"🚫 예외 사용자이므로 대기열 추가 제외: {member.display_name} ({member.id})")
-            
+
             # 예외 사용자용 환영 메시지 (선택사항)
             try:
                 welcome_channel_id = getattr(config, 'WELCOME_CHANNEL_ID', None)
@@ -345,7 +447,7 @@ async def on_member_join(member):
             except Exception as e:
                 print(f"⚠️ 예외 사용자 환영 메시지 전송 실패: {e}")
             return
-        
+
         # 대기열에 추가
         try:
             # 이미 대기열에 있는지 확인
@@ -354,7 +456,7 @@ async def on_member_join(member):
             else:
                 queue_manager.add_user(member.id)
                 print(f"✅ 대기열에 추가됨: {member.display_name} (현재 대기열: {queue_manager.get_queue_size()}명)")
-                
+
                 # 성공 채널에 알림 (선택사항)
                 try:
                     success_channel = bot.get_channel(config.SUCCESS_CHANNEL_ID)
@@ -365,7 +467,7 @@ async def on_member_join(member):
         except Exception as e:
             print(f"❌ 대기열 추가 실패: {member.display_name} - {e}")
             return
-        
+
         # 환영 메시지
         try:
             welcome_channel_id = getattr(config, 'WELCOME_CHANNEL_ID', None)
@@ -382,7 +484,7 @@ async def on_member_join(member):
                 print(f"ℹ️ 환영 채널이 설정되지 않음 (WELCOME_CHANNEL_ID)")
         except Exception as e:
             print(f"⚠️ 환영 메시지 전송 실패: {e}")
-            
+
     except Exception as e:
         print(f"❌ on_member_join 이벤트 처리 중 오류: {e}")
         import traceback

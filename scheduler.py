@@ -151,16 +151,61 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
         town_uuid: 마을 UUID (선택)
     """
     changes = []
-    
+
     try:
-        # 새 닉네임 생성 (기존 닉네임을 고려하여)
+        # 역할 양식 확인 (가장 높은 우선순위 역할)
+        role_format = None
+        applied_format_name = None
+        if CALLSIGN_ENABLED and callsign_manager:
+            try:
+                # 역할 우선순위 순으로 정렬 (position이 높을수록 우선순위가 높음)
+                sorted_roles = sorted(member.roles, key=lambda r: r.position, reverse=True)
+                for role in sorted_roles:
+                    format_str = callsign_manager.get_role_format(role.id)
+                    if format_str:
+                        role_format = format_str
+                        applied_format_name = role.name
+                        print(f"  🎭 역할 양식 적용: {role.name} - {format_str}")
+                        break
+            except Exception as e:
+                print(f"  ⚠️ 역할 양식 확인 실패: {e}")
+
+        # 새 닉네임 생성
         current_nickname = member.display_name
-        new_nickname = create_nickname(mc_id, nation, current_nickname)
-        
+
+        if role_format:
+            # 역할 양식이 있으면 양식 적용
+            # 콜사인 가져오기
+            user_callsign = None
+            if CALLSIGN_ENABLED and callsign_manager:
+                try:
+                    user_callsign = callsign_manager.get_callsign(member.id)
+                except Exception as e:
+                    print(f"  ⚠️ 콜사인 조회 실패: {e}")
+
+            # MC 정보가 없으면 ❌[ MC ] ❌로 표시
+            display_mc_id = mc_id if mc_id else "❌[ MC ] ❌"
+
+            # 양식 적용
+            new_nickname = callsign_manager.apply_format_to_nickname(
+                role_format,
+                mc_id=display_mc_id,
+                nation=nation,
+                town=town,
+                callsign=user_callsign
+            )
+            print(f"  🎭 역할 양식 적용됨: {new_nickname}")
+        else:
+            # 기본 닉네임 생성 (기존 로직)
+            new_nickname = create_nickname(mc_id, nation, current_nickname, town)
+
         try:
             if current_nickname != new_nickname:
                 await member.edit(nick=new_nickname)
-                changes.append(f"• 닉네임이 **``{new_nickname}``**로 변경됨")
+                if applied_format_name:
+                    changes.append(f"• 닉네임이 **``{new_nickname}``**로 변경됨 (🎭 {applied_format_name} 역할 양식)")
+                else:
+                    changes.append(f"• 닉네임이 **``{new_nickname}``**로 변경됨")
                 print(f"  ✅ 닉네임 변경: {current_nickname} → {new_nickname}")
             else:
                 print(f"  ℹ️ 닉네임 유지: {new_nickname}")
@@ -1583,18 +1628,63 @@ async def process_single_user(bot, session, user_id):
             print(f"  🗑️ 마크 계정 미연동 - 모든 관련 역할 제거 및 닉네임 초기화 시작")
 
             if member and guild:
-                # 0. 닉네임 초기화 (원래 이름으로 복구)
+                # 0. 닉네임 설정 (역할 양식이 있으면 적용, 없으면 초기화)
                 try:
-                    if member.nick:  # 닉네임이 설정되어 있는 경우만
-                        original_nick = member.nick
-                        await member.edit(nick=None)
-                        role_removal_changes.append(f"• 닉네임 초기화됨: `{original_nick}` → `{member.name}`")
-                        print(f"  ✅ 닉네임 초기화: {original_nick} → {member.name}")
+                    original_nick = member.nick if member.nick else member.name
+
+                    # 역할 양식 확인
+                    role_format = None
+                    applied_format_name = None
+                    if CALLSIGN_ENABLED and callsign_manager:
+                        try:
+                            # 역할 우선순위 순으로 정렬
+                            sorted_roles = sorted(member.roles, key=lambda r: r.position, reverse=True)
+                            for role in sorted_roles:
+                                format_str = callsign_manager.get_role_format(role.id)
+                                if format_str:
+                                    role_format = format_str
+                                    applied_format_name = role.name
+                                    print(f"  🎭 마크 미연동 사용자에게 역할 양식 적용: {role.name} - {format_str}")
+                                    break
+                        except Exception as role_err:
+                            print(f"  ⚠️ 역할 양식 확인 실패: {role_err}")
+
+                    if role_format:
+                        # 역할 양식이 있으면 양식 적용 (MC 정보는 ❌[ MC ] ❌로 표시)
+                        # 콜사인 가져오기
+                        user_callsign = None
+                        try:
+                            user_callsign = callsign_manager.get_callsign(member.id)
+                        except:
+                            pass
+
+                        new_nickname = callsign_manager.apply_format_to_nickname(
+                            role_format,
+                            mc_id="❌[ MC ] ❌",
+                            nation=None,
+                            town=None,
+                            callsign=user_callsign
+                        )
+
+                        if member.nick != new_nickname:
+                            await member.edit(nick=new_nickname)
+                            role_removal_changes.append(f"• 닉네임 변경됨: `{original_nick}` → `{new_nickname}` (🎭 {applied_format_name} 역할 양식)")
+                            print(f"  ✅ 역할 양식으로 닉네임 설정: {original_nick} → {new_nickname}")
+                        else:
+                            print(f"  ℹ️ 닉네임 유지: {new_nickname}")
+                    else:
+                        # 역할 양식이 없으면 닉네임 초기화
+                        if member.nick:  # 닉네임이 설정되어 있는 경우만
+                            await member.edit(nick=None)
+                            role_removal_changes.append(f"• 닉네임 초기화됨: `{original_nick}` → `{member.name}`")
+                            print(f"  ✅ 닉네임 초기화: {original_nick} → {member.name}")
+
                 except discord.Forbidden:
-                    role_removal_changes.append(f"• ⚠️ 닉네임 초기화 권한 없음")
-                    print(f"  ⚠️ 닉네임 초기화 권한 없음")
+                    role_removal_changes.append(f"• ⚠️ 닉네임 변경 권한 없음")
+                    print(f"  ⚠️ 닉네임 변경 권한 없음")
                 except Exception as nick_error:
-                    print(f"  ⚠️ 닉네임 초기화 실패: {nick_error}")
+                    role_removal_changes.append(f"• ⚠️ 닉네임 변경 실패: {str(nick_error)[:50]}")
+                    print(f"  ⚠️ 닉네임 변경 실패: {nick_error}")
 
                 # 1. 국민 역할 제거
                 if SUCCESS_ROLE_ID != 0:

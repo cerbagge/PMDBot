@@ -6,22 +6,25 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple
 
 class CallsignManager:
-    def __init__(self, filename: str = "data/callsigns.json", banned_file: str = "data/callsign_banned.json"):
+    def __init__(self, filename: str = "data/callsigns.json", banned_file: str = "data/callsign_banned.json", role_format_file: str = "data/role_formats.json"):
         """
         콜사인 관리자 초기화
 
         Args:
             filename: 콜사인 데이터 저장 파일
             banned_file: 콜사인 사용 금지 사용자 목록 파일
+            role_format_file: 역할별 닉네임 양식 저장 파일
         """
         # data 폴더 생성
         os.makedirs("data", exist_ok=True)
 
         self.filename = filename
         self.banned_file = banned_file
+        self.role_format_file = role_format_file
         self.callsigns = self.load_callsigns()
         self.banned_users = self.load_banned_users()
         self.cooldowns = self.load_cooldowns()
+        self.role_formats = self.load_role_formats()
     
     def load_callsigns(self) -> Dict:
         """콜사인 데이터 로드"""
@@ -328,6 +331,126 @@ class CallsignManager:
         self.save_cooldowns()
         return count
 
+    # ===== 역할별 닉네임 양식 관리 =====
+
+    def load_role_formats(self) -> Dict:
+        """역할별 닉네임 양식 데이터 로드"""
+        if os.path.exists(self.role_format_file):
+            try:
+                with open(self.role_format_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+
+    def save_role_formats(self):
+        """역할별 닉네임 양식 데이터 저장"""
+        with open(self.role_format_file, 'w', encoding='utf-8') as f:
+            json.dump(self.role_formats, f, ensure_ascii=False, indent=2)
+
+    def set_role_format(self, role_id: int, format_string: str) -> Tuple[bool, str]:
+        """
+        역할별 닉네임 양식 설정
+
+        Args:
+            role_id: 역할 ID
+            format_string: 닉네임 양식 문자열
+                          사용 가능한 변수: {MF}, {NN}, {TT}, {CC}, {NN/TT}
+
+        Returns:
+            (성공 여부, 메시지)
+        """
+        role_id_str = str(role_id)
+
+        # 양식 유효성 검증
+        valid_vars = ['{MF}', '{NN}', '{TT}', '{CC}', '{NN/TT}']
+
+        # 양식 길이 제한 (치환 전 최대 100자)
+        if len(format_string) > 100:
+            return False, "양식이 너무 깁니다. (최대 100자)"
+
+        # 양식 저장
+        self.role_formats[role_id_str] = {
+            "format": format_string,
+            "set_at": datetime.now().isoformat()
+        }
+
+        self.save_role_formats()
+        return True, f"역할 닉네임 양식이 설정되었습니다: `{format_string}`"
+
+    def get_role_format(self, role_id: int) -> Optional[str]:
+        """역할별 닉네임 양식 조회"""
+        role_data = self.role_formats.get(str(role_id))
+        if role_data and isinstance(role_data, dict):
+            return role_data.get("format")
+        return None
+
+    def remove_role_format(self, role_id: int) -> Tuple[bool, str]:
+        """역할별 닉네임 양식 제거"""
+        role_id_str = str(role_id)
+        if role_id_str in self.role_formats:
+            old_format = self.role_formats[role_id_str].get("format", "알 수 없음")
+            del self.role_formats[role_id_str]
+            self.save_role_formats()
+            return True, f"양식이 제거되었습니다. (이전 양식: `{old_format}`)"
+        return False, "설정된 양식이 없습니다."
+
+    def get_all_role_formats(self) -> Dict:
+        """모든 역할 양식 조회"""
+        return self.role_formats.copy()
+
+    def apply_format_to_nickname(self, format_string: str, mc_id: str = None, nation: str = None,
+                                 town: str = None, callsign: str = None) -> str:
+        """
+        양식 문자열에 실제 값을 치환하여 닉네임 생성
+
+        Args:
+            format_string: 양식 문자열
+            mc_id: 마인크래프트 닉네임
+            nation: PlanetEarth 국가 이름
+            town: PlanetEarth 마을 이름
+            callsign: 콜사인
+
+        Returns:
+            완성된 닉네임
+        """
+        result = format_string
+
+        # {MF} 또는 {MC} - 마인크래프트 닉네임
+        mc_display = mc_id if mc_id and mc_id not in ['', '❌', 'Unknown'] else '❌'
+        result = result.replace('{MF}', mc_display)
+        result = result.replace('{MC}', mc_display)
+
+        # {NN} - 국가 이름
+        nation_display = nation if nation and nation not in ['', '❌', '무소속'] else '❌'
+        result = result.replace('{NN}', nation_display)
+
+        # {TT} - 마을 이름
+        town_display = town if town and town not in ['', '❌', '무소속'] else '❌'
+        result = result.replace('{TT}', town_display)
+
+        # {CC} - 콜사인
+        callsign_display = callsign if callsign else ''
+        result = result.replace('{CC}', callsign_display)
+
+        # {NN/TT} - 국가가 있으면 국가, 없으면 "[ T ] 마을"
+        if '{NN/TT}' in result:
+            if nation and nation not in ['', '❌', '무소속']:
+                result = result.replace('{NN/TT}', nation)
+            elif town and town not in ['', '❌', '무소속']:
+                result = result.replace('{NN/TT}', f'[ T ] {town}')
+            else:
+                result = result.replace('{NN/TT}', '❌')
+
+        # 연속된 공백 제거 및 trim
+        result = ' '.join(result.split())
+
+        # 디스코드 닉네임 길이 제한 (32자)
+        if len(result) > 32:
+            result = result[:32]
+
+        return result
+
 
 # 콜사인 검증 함수
 def validate_callsign(callsign: str) -> Tuple[bool, str]:
@@ -397,4 +520,4 @@ def get_user_display_info(user_id: int, mc_id: str = None, nation: str = None) -
 
 # 싱글톤 인스턴스 생성
 callsign_manager = CallsignManager()
-print("✅ CallsignManager 인스턴스 생성됨")
+print("CallsignManager instance created successfully")

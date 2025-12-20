@@ -1392,6 +1392,8 @@ class SlashCommands(commands.Cog):
         nickname_error = None
         mc_id = None
         nation = None
+        town = None
+        applied_format = None
 
         try:
             # API를 통해 마크 ID와 국가 정보 조회
@@ -1443,7 +1445,32 @@ class SlashCommands(commands.Cog):
 
                                                             # BASE_NATION 국민인 경우에만 콜사인 적용
                                                             if nation == BASE_NATION:
-                                                                new_nickname = f"{mc_id} ㅣ {텍스트}"
+                                                                # 역할별 양식 확인 (가장 높은 우선순위 역할)
+                                                                role_format = None
+                                                                if isinstance(member, discord.Member):
+                                                                    # 역할 우선순위 순으로 정렬 (position이 높을수록 우선순위가 높음)
+                                                                    sorted_roles = sorted(member.roles, key=lambda r: r.position, reverse=True)
+                                                                    for role in sorted_roles:
+                                                                        format_str = callsign_manager.get_role_format(role.id)
+                                                                        if format_str:
+                                                                            role_format = format_str
+                                                                            applied_format = f"{role.name} 역할 양식"
+                                                                            print(f"  🎭 역할 양식 적용: {role.name} - {format_str}")
+                                                                            break
+
+                                                                # 닉네임 생성
+                                                                if role_format:
+                                                                    # 역할 양식이 있으면 양식 적용
+                                                                    new_nickname = callsign_manager.apply_format_to_nickname(
+                                                                        role_format,
+                                                                        mc_id=mc_id,
+                                                                        nation=nation,
+                                                                        town=town,
+                                                                        callsign=텍스트
+                                                                    )
+                                                                else:
+                                                                    # 기본 양식 사용
+                                                                    new_nickname = f"{mc_id} ㅣ {텍스트}"
 
                                                                 # 닉네임 변경 시도
                                                                 try:
@@ -1462,12 +1489,30 @@ class SlashCommands(commands.Cog):
             print(f"⚠️ 콜사인 즉시 적용 중 오류: {e}")
             nickname_error = "마인크래프트 계정 정보를 확인할 수 없습니다."
 
+        # {CC} 포함 역할 찾기
+        cc_role = None
+        if isinstance(member, discord.Member):
+            for role in member.roles:
+                format_str = callsign_manager.get_role_format(role.id)
+                if format_str and '{CC}' in format_str:
+                    cc_role = role
+                    break
+
         # 결과 메시지 생성
-        embed = discord.Embed(
-            title="✅ 콜사인 설정 완료",
-            description=f"콜사인이 **{텍스트}**로 설정되었습니다.",
-            color=0x00ff00
-        )
+        if cc_role:
+            # {CC} 역할이 있는 경우
+            embed = discord.Embed(
+                title="✅ 콜사인 적용 완료",
+                description=f"{cc_role.mention} 콜사인 적용 완료",
+                color=0x00ff00
+            )
+        else:
+            # {CC} 역할이 없는 경우
+            embed = discord.Embed(
+                title="✅ 콜사인 설정 완료",
+                description=f"콜사인이 **{텍스트}**로 설정되었습니다.",
+                color=0x00ff00
+            )
 
         # 쿨타임 정보
         embed.add_field(
@@ -1479,10 +1524,11 @@ class SlashCommands(commands.Cog):
         # 닉네임 변경 결과
         if nickname_updated:
             if mc_id:
-                new_nickname = f"{mc_id} ㅣ {텍스트}"
+                # 실제 적용된 닉네임 가져오기
+                actual_nickname = member.display_name
                 embed.add_field(
                     name="🔄 닉네임 변경",
-                    value=f"• 닉네임이 **``{new_nickname}``**로 즉시 변경됨",
+                    value=f"• 닉네임이 **``{actual_nickname}``**로 즉시 변경됨",
                     inline=False
                 )
                 embed.add_field(
@@ -1490,11 +1536,20 @@ class SlashCommands(commands.Cog):
                     value=f"• {BASE_NATION} 국민이므로 콜사인이 즉시 적용되었습니다.\n• 마인크래프트 정보가 변경되면 `/확인` 명령어를 사용하세요.",
                     inline=False
                 )
-                embed.add_field(
-                    name="🏷️ 적용된 닉네임 형식",
-                    value=f"**형식:** `{mc_id} ㅣ {텍스트}`",
-                    inline=False
-                )
+
+                # 역할 양식이 적용되었는지 표시
+                if applied_format:
+                    embed.add_field(
+                        name="🎭 적용된 양식",
+                        value=f"**{applied_format}**이 적용되었습니다.",
+                        inline=False
+                    )
+                else:
+                    embed.add_field(
+                        name="🏷️ 적용된 닉네임 형식",
+                        value=f"**기본 형식:** `{mc_id} ㅣ {텍스트}`",
+                        inline=False
+                    )
             else:
                 embed.add_field(
                     name="🔄 닉네임 변경",
@@ -1596,14 +1651,16 @@ class SlashCommands(commands.Cog):
     @app_commands.describe(
         기능="실행할 기능 선택",
         유저="대상 사용자 (쿨타임_초기화: 비어있으면 전체, 멘션하면 해당 유저만)",
-        텍스트="콜사인 텍스트 또는 사유"
+        역할="역할 양식 설정 대상 역할",
+        텍스트="콜사인 텍스트 또는 사유 또는 양식"
     )
     @app_commands.check(is_admin)
     async def 콜사인관리(
         self,
         interaction: discord.Interaction,
-        기능: Literal["사용자_조회", "콜사인_변경", "전체_목록", "권한박탈", "권한복구", "권한박탈_목록", "쿨타임_초기화", "데이터_백업", "백업_목록", "데이터_복구", "백업파일_업로드"],
+        기능: Literal["사용자_조회", "콜사인_변경", "전체_목록", "권한박탈", "권한복구", "권한박탈_목록", "쿨타임_초기화", "데이터_백업", "백업_목록", "데이터_복구", "백업파일_업로드", "역할_양식", "역할_양식_목록", "역할_양식_제거"],
         유저: discord.Member = None,
+        역할: discord.Role = None,
         텍스트: str = None
     ):
         """사용자 콜사인 관리 - 관리자 전용"""
@@ -2314,6 +2371,141 @@ class SlashCommands(commands.Cog):
             embed.set_footer(text=f"처리자: {interaction.user.name}")
             await interaction.followup.send(embed=embed)
         
+        elif 기능 == "역할_양식":
+            # 역할별 닉네임 양식 설정
+            if not 역할:
+                await interaction.response.send_message("역할을 지정해주세요.", ephemeral=True)
+                return
+
+            if not 텍스트:
+                await interaction.response.send_message("양식 텍스트를 입력해주세요.", ephemeral=True)
+                return
+
+            # 양식 설정
+            success, message = callsign_manager.set_role_format(역할.id, 텍스트)
+
+            embed = discord.Embed(
+                title="🎭 역할 닉네임 양식 설정" if success else "❌ 양식 설정 실패",
+                color=0x00ff00 if success else 0xff0000
+            )
+
+            if success:
+                embed.add_field(
+                    name="🎯 대상 역할",
+                    value=f"{역할.mention} (`{역할.name}`)",
+                    inline=False
+                )
+                embed.add_field(
+                    name="📝 설정된 양식",
+                    value=f"`{텍스트}`",
+                    inline=False
+                )
+                embed.add_field(
+                    name="📚 사용 가능한 변수",
+                    value="• `{MF}` 또는 `{MC}` - 마인크래프트 닉네임 (없으면 ❌)\n"
+                          "• `{NN}` - PlanetEarth 국가 이름 (없으면 ❌)\n"
+                          "• `{TT}` - PlanetEarth 마을 이름 (없으면 ❌)\n"
+                          "• `{CC}` - 콜사인 (없으면 빈 값)\n"
+                          "• `{NN/TT}` - 국가가 있으면 국가, 없으면 `[ T ] 마을` (둘 다 없으면 ❌)",
+                    inline=False
+                )
+
+                # 예시 생성
+                example = callsign_manager.apply_format_to_nickname(
+                    텍스트,
+                    mc_id="Steve",
+                    nation="Korea",
+                    town="Seoul",
+                    callsign="Leader"
+                )
+                embed.add_field(
+                    name="💡 예시",
+                    value=f"`{example}`",
+                    inline=False
+                )
+
+                embed.add_field(
+                    name="ℹ️ 안내",
+                    value=f"• 이 역할을 가진 사용자가 콜사인을 설정하면 자동으로 이 양식이 적용됩니다.\n"
+                          f"• 여러 역할을 가진 경우 **가장 우선순위가 높은 역할**의 양식이 적용됩니다.\n"
+                          f"• 역할 우선순위는 Discord 서버 설정에서 확인할 수 있습니다.",
+                    inline=False
+                )
+            else:
+                embed.description = message
+
+            embed.set_footer(text=f"처리자: {interaction.user.name}")
+            await interaction.response.send_message(embed=embed)
+
+        elif 기능 == "역할_양식_목록":
+            # 모든 역할 양식 조회
+            all_formats = callsign_manager.get_all_role_formats()
+
+            if not all_formats:
+                embed = discord.Embed(
+                    title="📋 역할 닉네임 양식 목록",
+                    description="설정된 역할 양식이 없습니다.",
+                    color=0x2f3136
+                )
+            else:
+                embed = discord.Embed(
+                    title="📋 역할 닉네임 양식 목록",
+                    description=f"총 {len(all_formats)}개의 역할 양식이 설정되어 있습니다.",
+                    color=0x00bfff
+                )
+
+                for i, (role_id, format_data) in enumerate(list(all_formats.items())[:15], 1):
+                    try:
+                        role = interaction.guild.get_role(int(role_id))
+                        role_name = role.name if role else f"Unknown Role ({role_id})"
+                        role_mention = role.mention if role else f"<삭제된 역할>"
+                    except:
+                        role_name = f"Unknown ({role_id})"
+                        role_mention = f"<삭제된 역할>"
+
+                    format_string = format_data.get("format", "알 수 없음")
+                    set_date = "알 수 없음"
+                    if "set_at" in format_data:
+                        set_date = format_data["set_at"][:10]
+
+                    embed.add_field(
+                        name=f"{i}. {role_name}",
+                        value=f"**역할:** {role_mention}\n"
+                              f"**양식:** `{format_string}`\n"
+                              f"**설정일:** {set_date}",
+                        inline=False
+                    )
+
+                if len(all_formats) > 15:
+                    embed.set_footer(text=f"... 외 {len(all_formats) - 15}개")
+
+            await interaction.response.send_message(embed=embed)
+
+        elif 기능 == "역할_양식_제거":
+            # 역할 양식 제거
+            if not 역할:
+                await interaction.response.send_message("제거할 역할을 지정해주세요.", ephemeral=True)
+                return
+
+            success, message = callsign_manager.remove_role_format(역할.id)
+
+            embed = discord.Embed(
+                title="🗑️ 역할 양식 제거" if success else "⚠️ 양식 제거 실패",
+                description=f"**대상 역할:** {역할.mention}\n\n{message}",
+                color=0x00ff00 if success else 0xff0000
+            )
+
+            if success:
+                embed.add_field(
+                    name="ℹ️ 안내",
+                    value=f"• 이제 이 역할을 가진 사용자는 기본 양식으로 닉네임이 설정됩니다.\n"
+                          f"• 기존 사용자의 닉네임은 변경되지 않습니다.",
+                    inline=False
+                )
+
+            embed.set_footer(text=f"처리자: {interaction.user.name}")
+            await interaction.response.send_message(embed=embed)
+
         elif 기능 == "백업파일_업로드":  # 기존: 백업백업파일_업로드
             # 백업 관리자 가져오기
             backup_manager = None
