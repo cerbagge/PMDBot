@@ -433,6 +433,11 @@ class CallsignManager:
         """
         양식 문자열에 실제 값을 치환하여 닉네임 생성
 
+        새로운 문법 지원:
+        - {CC}, {NN}, {TT}, {MC} - 기본 변수
+        - [A/B/C] - A → B → C 순서로 폴백 (값이 없으면 다음 옵션)
+        - "텍스트" 또는 '텍스트' - 리터럴 텍스트
+
         Args:
             format_string: 양식 문자열
             mc_id: 마인크래프트 닉네임
@@ -443,33 +448,186 @@ class CallsignManager:
         Returns:
             완성된 닉네임
         """
-        result = format_string
+        import re
 
-        # {MF} 또는 {MC} - 마인크래프트 닉네임
-        mc_display = mc_id if mc_id and mc_id not in ['', '❌', 'Unknown'] else '❌'
-        result = result.replace('{MF}', mc_display)
-        result = result.replace('{MC}', mc_display)
+        # 변수 값 매핑
+        variables = {
+            'CC': callsign if callsign else None,
+            'NN': nation if nation and nation not in ['', '❌', '무소속'] else None,
+            'TT': town if town and town not in ['', '❌', '무소속'] else None,
+            'MC': mc_id if mc_id and mc_id not in ['', '❌', 'Unknown'] else None,
+            'MF': mc_id if mc_id and mc_id not in ['', '❌', 'Unknown'] else None,
+        }
 
-        # {NN} - 국가 이름
-        nation_display = nation if nation and nation not in ['', '❌', '무소속'] else '❌'
-        result = result.replace('{NN}', nation_display)
+        def evaluate_expression(expr: str) -> str:
+            """표현식을 평가하여 값 반환 (복합 표현식 지원)"""
+            expr = expr.strip()
 
-        # {TT} - 마을 이름
-        town_display = town if town and town not in ['', '❌', '무소속'] else '❌'
-        result = result.replace('{TT}', town_display)
+            # 단순 문자열 리터럴
+            if (expr.startswith('"') and expr.endswith('"')) or \
+               (expr.startswith("'") and expr.endswith("'")):
+                return expr[1:-1]
 
-        # {CC} - 콜사인
-        callsign_display = callsign if callsign else ''
-        result = result.replace('{CC}', callsign_display)
+            # 단순 변수
+            if expr.startswith('{') and expr.endswith('}'):
+                var_name = expr[1:-1]
+                value = variables.get(var_name)
+                return value if value else None
 
-        # {NN/TT} - 국가가 있으면 국가, 없으면 "[ T ] 마을"
-        if '{NN/TT}' in result:
-            if nation and nation not in ['', '❌', '무소속']:
-                result = result.replace('{NN/TT}', nation)
-            elif town and town not in ['', '❌', '무소속']:
-                result = result.replace('{NN/TT}', f'[ T ] {town}')
+            # 복합 표현식: {CC}" /" 같은 형태
+            # 변수와 리터럴을 찾아서 조합
+            import re
+            parts = []
+            last_pos = 0
+            failed = False
+
+            # 변수 {VAR} 또는 리터럴 "text"/'text' 찾기
+            pattern = r'\{([A-Z]+)\}|"([^"]*)"|\'([^\']*)\''
+
+            for match in re.finditer(pattern, expr):
+                # 매치 사이의 공백이나 텍스트도 포함
+                if match.start() > last_pos:
+                    between_text = expr[last_pos:match.start()]
+                    if between_text.strip():  # 공백만 있으면 무시
+                        # 매치되지 않은 텍스트가 있으면 복합 표현식으로 처리 불가
+                        pass
+
+                last_pos = match.end()
+
+                # 변수
+                if match.group(1):
+                    var_name = match.group(1)
+                    value = variables.get(var_name)
+                    if value:
+                        parts.append(value)
+                    else:
+                        # 변수 값이 없으면 전체 표현식 실패
+                        failed = True
+                        break
+                # 큰따옴표 리터럴
+                elif match.group(2) is not None:
+                    parts.append(match.group(2))
+                # 작은따옴표 리터럴
+                elif match.group(3) is not None:
+                    parts.append(match.group(3))
+
+            if failed or not parts:
+                return None
+
+            return ''.join(parts)
+
+        def process_fallback(match) -> str:
+            """[A/B/C] 형식의 폴백 처리 (따옴표 안의 / 무시)"""
+            content = match.group(1)
+
+            # 스마트 분할: 따옴표 안의 /는 무시
+            import re
+            options = []
+            current = []
+            in_quote = None
+
+            i = 0
+            while i < len(content):
+                char = content[i]
+
+                # 따옴표 시작/종료
+                if char in ('"', "'"):
+                    if in_quote is None:
+                        in_quote = char
+                        current.append(char)
+                    elif in_quote == char:
+                        in_quote = None
+                        current.append(char)
+                    else:
+                        current.append(char)
+                # 따옴표 밖의 / → 구분자
+                elif char == '/' and in_quote is None:
+                    options.append(''.join(current))
+                    current = []
+                else:
+                    current.append(char)
+
+                i += 1
+
+            # 마지막 옵션 추가
+            if current or not options:
+                options.append(''.join(current))
+
+            # 각 옵션을 순서대로 시도
+            for option in options:
+                result = evaluate_expression(option.strip())
+                if result:
+                    return result
+
+            # 모든 옵션 실패 시 빈 문자열
+            return ''
+
+        # [A/B/C] 형식의 폴백 처리 (따옴표 안의 [] 무시)
+        def find_and_replace_brackets(text: str) -> str:
+            """따옴표 밖의 [...] 패턴만 찾아서 처리"""
+            result = []
+            i = 0
+            in_quote = None
+
+            while i < len(text):
+                char = text[i]
+
+                # 따옴표 추적
+                if char in ('"', "'") and (i == 0 or text[i-1] != '\\'):
+                    if in_quote is None:
+                        in_quote = char
+                    elif in_quote == char:
+                        in_quote = None
+                    result.append(char)
+                    i += 1
+                # 따옴표 밖의 [ 발견
+                elif char == '[' and in_quote is None:
+                    # 닫는 ]를 찾기
+                    depth = 1
+                    j = i + 1
+                    content_start = j
+                    inner_quote = None
+
+                    while j < len(text) and depth > 0:
+                        if text[j] in ('"', "'") and (j == 0 or text[j-1] != '\\'):
+                            if inner_quote is None:
+                                inner_quote = text[j]
+                            elif inner_quote == text[j]:
+                                inner_quote = None
+                        elif text[j] == '[' and inner_quote is None:
+                            depth += 1
+                        elif text[j] == ']' and inner_quote is None:
+                            depth -= 1
+                        j += 1
+
+                    if depth == 0:
+                        # 매칭되는 [...] 발견
+                        content = text[content_start:j-1]
+                        # 임시 객체로 process_fallback 호출
+                        class Match:
+                            def group(self, n):
+                                return content
+                        replacement = process_fallback(Match())
+                        result.append(replacement)
+                        i = j
+                    else:
+                        # 닫는 ] 없음
+                        result.append(char)
+                        i += 1
+                else:
+                    result.append(char)
+                    i += 1
+
+            return ''.join(result)
+
+        result = find_and_replace_brackets(format_string)
+
+        # 남은 단순 변수 치환
+        for var_name, var_value in variables.items():
+            if var_value:
+                result = result.replace('{' + var_name + '}', var_value)
             else:
-                result = result.replace('{NN/TT}', '❌')
+                result = result.replace('{' + var_name + '}', '')
 
         # 연속된 공백 제거 및 trim
         result = ' '.join(result.split())
