@@ -98,6 +98,40 @@ class DatabaseManager:
             ON nation_history(nation_name)
         ''')
 
+        # 콜사인 테이블 (신규)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS callsigns (
+                discord_id INTEGER PRIMARY KEY,
+                callsign TEXT NOT NULL,
+                set_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                admin_override INTEGER DEFAULT 0,
+                FOREIGN KEY (discord_id) REFERENCES users(discord_id)
+            )
+        ''')
+
+        # 콜사인 히스토리 테이블 (신규)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS callsign_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                discord_id INTEGER NOT NULL,
+                callsign TEXT NOT NULL,
+                set_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                admin_override INTEGER DEFAULT 0,
+                FOREIGN KEY (discord_id) REFERENCES users(discord_id)
+            )
+        ''')
+
+        # 콜사인 인덱스
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_callsign_discord_id
+            ON callsigns(discord_id)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_callsign_history_discord_id
+            ON callsign_history(discord_id)
+        ''')
+
         conn.commit()
         conn.close()
 
@@ -613,6 +647,144 @@ class DatabaseManager:
 
         except Exception as e:
             print(f"❌ 데이터베이스 내보내기 실패: {e}")
+            return False
+
+    def set_callsign(self, discord_id: int, callsign: str, admin_override: bool = False) -> bool:
+        """
+        사용자 콜사인 설정 (DB에 저장)
+
+        Args:
+            discord_id: 디스코드 사용자 ID
+            callsign: 콜사인
+            admin_override: 관리자가 강제로 설정했는지 여부
+
+        Returns:
+            성공 여부
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            # 기존 콜사인 확인
+            cursor.execute('SELECT callsign FROM callsigns WHERE discord_id = ?', (discord_id,))
+            existing = cursor.fetchone()
+
+            if existing:
+                # 기존 콜사인이 있으면 업데이트
+                cursor.execute('''
+                    UPDATE callsigns
+                    SET callsign = ?, set_at = ?, admin_override = ?
+                    WHERE discord_id = ?
+                ''', (callsign, datetime.now(), 1 if admin_override else 0, discord_id))
+            else:
+                # 새로운 콜사인 추가
+                cursor.execute('''
+                    INSERT INTO callsigns (discord_id, callsign, set_at, admin_override)
+                    VALUES (?, ?, ?, ?)
+                ''', (discord_id, callsign, datetime.now(), 1 if admin_override else 0))
+
+            # 콜사인 히스토리에 추가
+            cursor.execute('''
+                INSERT INTO callsign_history (discord_id, callsign, set_at, admin_override)
+                VALUES (?, ?, ?, ?)
+            ''', (discord_id, callsign, datetime.now(), 1 if admin_override else 0))
+
+            conn.commit()
+            conn.close()
+
+            print(f"✅ DB에 콜사인 저장 완료: {discord_id} -> {callsign}")
+            return True
+
+        except Exception as e:
+            print(f"❌ DB 콜사인 저장 실패: {e}")
+            return False
+
+    def get_callsign(self, discord_id: int) -> Optional[str]:
+        """
+        사용자 콜사인 조회
+
+        Args:
+            discord_id: 디스코드 사용자 ID
+
+        Returns:
+            콜사인 (없으면 None)
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('SELECT callsign FROM callsigns WHERE discord_id = ?', (discord_id,))
+            result = cursor.fetchone()
+            conn.close()
+
+            return result['callsign'] if result else None
+
+        except Exception as e:
+            print(f"❌ DB 콜사인 조회 실패: {e}")
+            return None
+
+    def get_callsign_history(self, discord_id: int) -> List[Dict]:
+        """
+        사용자 콜사인 변경 히스토리 조회
+
+        Args:
+            discord_id: 디스코드 사용자 ID
+
+        Returns:
+            콜사인 히스토리 목록
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT callsign, set_at, admin_override
+                FROM callsign_history
+                WHERE discord_id = ?
+                ORDER BY set_at DESC
+            ''', (discord_id,))
+
+            results = cursor.fetchall()
+            conn.close()
+
+            history = []
+            for row in results:
+                history.append({
+                    'callsign': row['callsign'],
+                    'set_at': row['set_at'],
+                    'admin_override': bool(row['admin_override'])
+                })
+
+            return history
+
+        except Exception as e:
+            print(f"❌ 콜사인 히스토리 조회 실패: {e}")
+            return []
+
+    def delete_callsign(self, discord_id: int) -> bool:
+        """
+        사용자 콜사인 삭제
+
+        Args:
+            discord_id: 디스코드 사용자 ID
+
+        Returns:
+            성공 여부
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('DELETE FROM callsigns WHERE discord_id = ?', (discord_id,))
+
+            conn.commit()
+            conn.close()
+
+            print(f"✅ DB에서 콜사인 삭제 완료: {discord_id}")
+            return True
+
+        except Exception as e:
+            print(f"❌ DB 콜사인 삭제 실패: {e}")
             return False
 
 

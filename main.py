@@ -293,20 +293,30 @@ async def on_ready():
 async def on_message(message):
     """메시지 이벤트 처리 - &MF 명령어 감지 (특정 봇만)"""
     try:
-        # &MF 명령어 확인
-        if message.content.startswith('&MF'):
+        # &MF 명령어 확인 (메시지 내 모든 줄 검사)
+        if '&MF' in message.content:
             # 허용된 봇 ID 목록
             ALLOWED_BOT_IDS = [557628352828014614, 1325579039888511056]
 
             # 허용된 봇이 아니면 무시
             if message.author.id not in ALLOWED_BOT_IDS:
-                print(f"⚠️ &MF 명령어 무시: 허용되지 않은 사용자 {message.author.name} ({message.author.id})")
                 return
 
             import re
 
+            # 메시지에서 &MF 명령어가 있는 줄 찾기
+            lines = message.content.split('\n')
+            mf_line = None
+            for line in lines:
+                if line.strip().startswith('&MF'):
+                    mf_line = line.strip()
+                    break
+
+            if not mf_line:
+                return
+
             # &MF 제거하고 나머지 텍스트 추출
-            content = message.content[3:].strip()
+            content = mf_line[3:].strip()
 
             print(f"🔍 &MF 명령어 감지! (봇: {message.author.name})")
             print(f"📝 원본 메시지: {message.content}")
@@ -361,7 +371,27 @@ async def on_message(message):
                 return
 
             nation_name = nation_info['nation_name']
-            new_channel_name = f"{nation_name} 대사관"
+
+            # 국가 이름을 특수 대문자로 변환 (Mathematical Bold Sans-Serif)
+            def convert_to_bold_sans_serif(text):
+                # 일반 알파벳 대문자 -> Mathematical Bold Sans-Serif
+                normal = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                bold_sans = "𝖠𝖡𝖢𝖣𝖤𝖥𝖦𝖧𝖨𝖩𝖪𝖫𝖬𝖭𝖮𝖯𝖰𝖱𝖲𝖳𝖴𝖵𝖶𝖷𝖸𝖹"
+
+                result = []
+                for char in text.upper():
+                    if char in normal:
+                        idx = normal.index(char)
+                        result.append(bold_sans[idx])
+                    else:
+                        result.append(char)
+                return ''.join(result)
+
+            nation_name_styled = convert_to_bold_sans_serif(nation_name)
+            new_channel_name = f"{nation_name_styled} 대사관"
+
+            # nationRanks 정보 가져오기
+            nation_ranks = nation_info.get('nationRanks', '정보 없음')
 
             # 현재 채널 이름 변경
             try:
@@ -371,9 +401,10 @@ async def on_message(message):
                     f"✅ 채널 이름이 변경되었습니다!\n"
                     f"사용자: `{minecraft_name}` (Discord ID: `{discord_id}`)\n"
                     f"국가: `{nation_name}`\n"
+                    f"직위: `{nation_ranks}`\n"
                     f"변경: `{old_name}` → `{new_channel_name}`"
                 )
-                print(f"✅ 채널 이름 변경 성공: {old_name} -> {new_channel_name}")
+                print(f"✅ 채널 이름 변경 성공: {old_name} -> {new_channel_name} (직위: {nation_ranks})")
             except discord.Forbidden:
                 await message.channel.send("❌ 채널 이름을 변경할 권한이 없습니다.")
                 print(f"❌ 채널 이름 변경 권한 없음: {message.channel.name}")

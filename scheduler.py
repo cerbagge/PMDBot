@@ -88,11 +88,9 @@ try:
     AUTO_EXECUTION_DAY = config.AUTO_EXECUTION_DAY
     AUTO_EXECUTION_HOUR = config.AUTO_EXECUTION_HOUR
     AUTO_EXECUTION_MINUTE = config.AUTO_EXECUTION_MINUTE
-    CALLSIGN_FALLBACK_ROLE_ID = getattr(config, 'CALLSIGN_FALLBACK_ROLE_ID', None)  # 콜사인 폴백 역할 ID
     print("✅ scheduler.py: config.py에서 환경변수 로드 완료")
     print(f"  - SUCCESS_ROLE_ID: {SUCCESS_ROLE_ID}")
     print(f"  - SUCCESS_ROLE_ID_OUT: {SUCCESS_ROLE_ID_OUT}")
-    print(f"  - CALLSIGN_FALLBACK_ROLE_ID: {CALLSIGN_FALLBACK_ROLE_ID}")
 except ImportError:
     # config.py가 없으면 직접 환경변수 로드
     print("⚠️ config.py를 찾을 수 없어 직접 환경변수를 로드합니다.")
@@ -105,11 +103,9 @@ except ImportError:
     AUTO_EXECUTION_DAY = int(os.getenv("AUTO_EXECUTION_DAY", "2"))
     AUTO_EXECUTION_HOUR = int(os.getenv("AUTO_EXECUTION_HOUR", "3"))
     AUTO_EXECUTION_MINUTE = int(os.getenv("AUTO_EXECUTION_MINUTE", "24"))
-    CALLSIGN_FALLBACK_ROLE_ID = int(os.getenv("CALLSIGN_FALLBACK_ROLE_ID", "0")) if os.getenv("CALLSIGN_FALLBACK_ROLE_ID") else None
     print(f"✅ scheduler.py: 직접 환경변수 로드 완료")
     print(f"  - SUCCESS_ROLE_ID: {SUCCESS_ROLE_ID}")
     print(f"  - SUCCESS_ROLE_ID_OUT: {SUCCESS_ROLE_ID_OUT}")
-    print(f"  - CALLSIGN_FALLBACK_ROLE_ID: {CALLSIGN_FALLBACK_ROLE_ID}")
 
 # 스케줄러 인스턴스
 # 봇 인스턴스 참조 저장
@@ -181,7 +177,7 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
             # 역할 양식이 있으면 양식 적용
             user_callsign = None
 
-            # 콜사인 조회 (양식 변경 판단용)
+            # 콜사인 조회
             if CALLSIGN_ENABLED and callsign_manager:
                 try:
                     user_callsign = callsign_manager.get_callsign(member.id)
@@ -189,19 +185,6 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
                         print(f"  🏷️ 콜사인 조회됨: {user_callsign}")
                 except Exception as e:
                     print(f"  ⚠️ 콜사인 조회 실패: {e}")
-
-            # 양식 동적 변경: {MC} | {NN/TT} 양식을 콜사인 유무에 따라 변경
-            if role_format == "{MC} | {NN/TT}":
-                if user_callsign:
-                    # 콜사인이 있으면: {CC} / {MC} | {NN/TT}
-                    role_format = "{CC} / {MC} | {NN/TT}"
-                    print(f"  ✏️ 콜사인 설정됨 → 양식 변경: {role_format}")
-                else:
-                    # 콜사인이 없으면: {MC} | {NN/TT} 그대로
-                    print(f"  ℹ️ 콜사인 미설정 → 기본 양식 유지: {role_format}")
-            elif '{CC}' in role_format and not user_callsign:
-                # 다른 양식에 {CC}가 있지만 콜사인이 없는 경우 (기존 로직)
-                print(f"  ⚠️ 양식에 {{CC}} 포함하지만 콜사인 미설정")
 
             # MC 정보가 없으면 ❌[ MC ] ❌로 표시
             display_mc_id = mc_id if mc_id else "❌[ MC ] ❌"
@@ -216,11 +199,12 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
             )
             print(f"  🎭 역할 양식 적용됨: {new_nickname}")
         else:
-            # 기본 닉네임 생성 (기존 로직)
-            new_nickname = create_nickname(mc_id, nation, current_nickname, town)
+            # 역할 양식이 없으면 닉네임 변경하지 않음
+            print(f"  ℹ️ 역할 양식 없음 - 닉네임 변경 건너뜀")
+            new_nickname = None
 
         try:
-            if current_nickname != new_nickname:
+            if new_nickname and current_nickname != new_nickname:
                 await member.edit(nick=new_nickname)
                 if applied_format_name:
                     changes.append(f"• 닉네임이 **``{new_nickname}``**로 변경됨 (🎭 {applied_format_name} 역할 양식)")
@@ -1683,26 +1667,13 @@ async def process_single_user(bot, session, user_id):
                         # 역할 양식이 있으면 양식 적용 (MC 정보는 ❌[ MC ] ❌로 표시)
                         user_callsign = None
 
-                        # 콜사인 조회 (양식 변경 판단용)
+                        # 콜사인 조회
                         try:
                             user_callsign = callsign_manager.get_callsign(member.id)
                             if user_callsign:
                                 print(f"  🏷️ 콜사인 조회됨: {user_callsign}")
                         except:
                             pass
-
-                        # 양식 동적 변경: {MC} | {NN/TT} 양식을 콜사인 유무에 따라 변경
-                        if role_format == "{MC} | {NN/TT}":
-                            if user_callsign:
-                                # 콜사인이 있으면: {CC} / {MC} | {NN/TT}
-                                role_format = "{CC} / {MC} | {NN/TT}"
-                                print(f"  ✏️ 콜사인 설정됨 → 양식 변경: {role_format}")
-                            else:
-                                # 콜사인이 없으면: {MC} | {NN/TT} 그대로
-                                print(f"  ℹ️ 콜사인 미설정 → 기본 양식 유지: {role_format}")
-                        elif '{CC}' in role_format and not user_callsign:
-                            # 다른 양식에 {CC}가 있지만 콜사인이 없는 경우
-                            print(f"  ⚠️ 양식에 {{CC}} 포함하지만 콜사인 미설정")
 
                         new_nickname = callsign_manager.apply_format_to_nickname(
                             role_format,
@@ -1719,11 +1690,8 @@ async def process_single_user(bot, session, user_id):
                         else:
                             print(f"  ℹ️ 닉네임 유지: {new_nickname}")
                     else:
-                        # 역할 양식이 없으면 닉네임 초기화
-                        if member.nick:  # 닉네임이 설정되어 있는 경우만
-                            await member.edit(nick=None)
-                            role_removal_changes.append(f"• 닉네임 초기화됨: `{original_nick}` → `{member.name}`")
-                            print(f"  ✅ 닉네임 초기화: {original_nick} → {member.name}")
+                        # 역할 양식이 없으면 닉네임 변경하지 않음
+                        print(f"  ℹ️ 역할 양식 없음 - 닉네임 변경 건너뜀")
 
                 except discord.Forbidden:
                     role_removal_changes.append(f"• ⚠️ 닉네임 변경 권한 없음")
