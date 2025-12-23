@@ -32,20 +32,20 @@ def format_duration(seconds: int) -> str:
     
     return " ".join(parts)
 
-def format_estimated_time(queue_size: int, seconds_per_item: int = 36) -> str:
+def format_estimated_time(queue_size: int, seconds_per_item: int = 20) -> str:
     """
     대기열 크기와 아이템당 처리 시간을 바탕으로 예상 완료 시간을 계산
-    
+
     Args:
         queue_size (int): 대기열 크기
-        seconds_per_item (int): 아이템당 예상 처리 시간 (기본값: 36초)
-        
+        seconds_per_item (int): 아이템당 예상 처리 시간 (기본값: 20초)
+
     Returns:
         str: 포맷된 예상 시간 문자열
     """
     if queue_size <= 0:
         return "대기열이 비어있습니다"
-    
+
     total_seconds = queue_size * seconds_per_item
     return f"약 {format_duration(total_seconds)}"
 

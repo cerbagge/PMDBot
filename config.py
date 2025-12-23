@@ -59,6 +59,9 @@ class Config:
         self.BASE_NATION_UUID = self._get_env("BASE_NATION_UUID", None)  # UUID 기반 (우선)
         self.REMOVE_ROLE_IF_WRONG_NATION = self._get_env_bool("REMOVE_ROLE_IF_WRONG_NATION", True)
         self.AUTO_ASSIGN_NATION_ROLES = self._get_env_bool("AUTO_ASSIGN_NATION_ROLES", False)
+
+        # 콜사인 관련 설정
+        self.CALLSIGN_FALLBACK_ROLE_ID = self._get_env_int("CALLSIGN_FALLBACK_ROLE_ID", None)
         
         # 필수 항목 검증
         self._validate_config()

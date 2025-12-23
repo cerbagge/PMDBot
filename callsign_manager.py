@@ -25,6 +25,15 @@ class CallsignManager:
         self.banned_users = self.load_banned_users()
         self.cooldowns = self.load_cooldowns()
         self.role_formats = self.load_role_formats()
+
+        # database_manager import
+        try:
+            from database_manager import db_manager
+            self.db_manager = db_manager
+            print("✅ callsign_manager: database_manager 연동 완료")
+        except ImportError:
+            self.db_manager = None
+            print("⚠️ callsign_manager: database_manager 비활성화")
     
     def load_callsigns(self) -> Dict:
         """콜사인 데이터 로드"""
@@ -37,9 +46,21 @@ class CallsignManager:
         return {}
     
     def save_callsigns(self):
-        """콜사인 데이터 저장"""
+        """콜사인 데이터 저장 (JSON + DB)"""
+        # JSON 파일에 저장
         with open(self.filename, 'w', encoding='utf-8') as f:
             json.dump(self.callsigns, f, ensure_ascii=False, indent=2)
+
+        # DB에도 저장 (활성화된 경우)
+        if self.db_manager:
+            for user_id_str, data in self.callsigns.items():
+                try:
+                    user_id = int(user_id_str)
+                    callsign = data.get('callsign', '')
+                    admin_override = data.get('admin_override', False)
+                    self.db_manager.set_callsign(user_id, callsign, admin_override)
+                except Exception as e:
+                    print(f"⚠️ DB 콜사인 저장 실패 ({user_id_str}): {e}")
     
     def load_banned_users(self) -> Dict:
         """콜사인 사용 금지 사용자 목록 로드"""
@@ -188,19 +209,27 @@ class CallsignManager:
                 hours = remaining.seconds // 3600
                 return False, f"쿨타임 중입니다. {days}일 {hours}시간 후에 다시 시도해주세요."
         
-        # 콜사인 저장
+        # 콜사인 저장 (JSON)
         self.callsigns[user_id_str] = {
             "callsign": callsign,
             "set_at": datetime.now().isoformat(),
             "admin_override": admin_override  # 관리자가 강제로 설정했는지 기록
         }
-        
+
         # 쿨타임 설정 (15일) - force나 admin_override가 아닐 때만
         if not force and not admin_override:
             self.cooldowns[user_id_str] = datetime.now() + timedelta(days=15)
             self.save_cooldowns()
-        
+
+        # JSON 파일에 저장
         self.save_callsigns()
+
+        # DB에도 저장 (활성화된 경우)
+        if self.db_manager:
+            try:
+                self.db_manager.set_callsign(user_id, callsign, admin_override)
+            except Exception as e:
+                print(f"⚠️ DB 콜사인 저장 실패 ({user_id}): {e}")
         
         # 메시지 생성
         if admin_override:

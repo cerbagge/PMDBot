@@ -88,9 +88,11 @@ try:
     AUTO_EXECUTION_DAY = config.AUTO_EXECUTION_DAY
     AUTO_EXECUTION_HOUR = config.AUTO_EXECUTION_HOUR
     AUTO_EXECUTION_MINUTE = config.AUTO_EXECUTION_MINUTE
+    CALLSIGN_FALLBACK_ROLE_ID = getattr(config, 'CALLSIGN_FALLBACK_ROLE_ID', None)  # 콜사인 폴백 역할 ID
     print("✅ scheduler.py: config.py에서 환경변수 로드 완료")
     print(f"  - SUCCESS_ROLE_ID: {SUCCESS_ROLE_ID}")
     print(f"  - SUCCESS_ROLE_ID_OUT: {SUCCESS_ROLE_ID_OUT}")
+    print(f"  - CALLSIGN_FALLBACK_ROLE_ID: {CALLSIGN_FALLBACK_ROLE_ID}")
 except ImportError:
     # config.py가 없으면 직접 환경변수 로드
     print("⚠️ config.py를 찾을 수 없어 직접 환경변수를 로드합니다.")
@@ -103,9 +105,11 @@ except ImportError:
     AUTO_EXECUTION_DAY = int(os.getenv("AUTO_EXECUTION_DAY", "2"))
     AUTO_EXECUTION_HOUR = int(os.getenv("AUTO_EXECUTION_HOUR", "3"))
     AUTO_EXECUTION_MINUTE = int(os.getenv("AUTO_EXECUTION_MINUTE", "24"))
+    CALLSIGN_FALLBACK_ROLE_ID = int(os.getenv("CALLSIGN_FALLBACK_ROLE_ID", "0")) if os.getenv("CALLSIGN_FALLBACK_ROLE_ID") else None
     print(f"✅ scheduler.py: 직접 환경변수 로드 완료")
     print(f"  - SUCCESS_ROLE_ID: {SUCCESS_ROLE_ID}")
     print(f"  - SUCCESS_ROLE_ID_OUT: {SUCCESS_ROLE_ID_OUT}")
+    print(f"  - CALLSIGN_FALLBACK_ROLE_ID: {CALLSIGN_FALLBACK_ROLE_ID}")
 
 # 스케줄러 인스턴스
 # 봇 인스턴스 참조 저장
@@ -175,13 +179,29 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
 
         if role_format:
             # 역할 양식이 있으면 양식 적용
-            # 콜사인 가져오기
             user_callsign = None
+
+            # 콜사인 조회 (양식 변경 판단용)
             if CALLSIGN_ENABLED and callsign_manager:
                 try:
                     user_callsign = callsign_manager.get_callsign(member.id)
+                    if user_callsign:
+                        print(f"  🏷️ 콜사인 조회됨: {user_callsign}")
                 except Exception as e:
                     print(f"  ⚠️ 콜사인 조회 실패: {e}")
+
+            # 양식 동적 변경: {MC} | {NN/TT} 양식을 콜사인 유무에 따라 변경
+            if role_format == "{MC} | {NN/TT}":
+                if user_callsign:
+                    # 콜사인이 있으면: {CC} / {MC} | {NN/TT}
+                    role_format = "{CC} / {MC} | {NN/TT}"
+                    print(f"  ✏️ 콜사인 설정됨 → 양식 변경: {role_format}")
+                else:
+                    # 콜사인이 없으면: {MC} | {NN/TT} 그대로
+                    print(f"  ℹ️ 콜사인 미설정 → 기본 양식 유지: {role_format}")
+            elif '{CC}' in role_format and not user_callsign:
+                # 다른 양식에 {CC}가 있지만 콜사인이 없는 경우 (기존 로직)
+                print(f"  ⚠️ 양식에 {{CC}} 포함하지만 콜사인 미설정")
 
             # MC 정보가 없으면 ❌[ MC ] ❌로 표시
             display_mc_id = mc_id if mc_id else "❌[ MC ] ❌"
@@ -685,13 +705,20 @@ def create_nickname(mc_id: str, nation: str, current_nickname: str = None, town:
 
     return abbreviated_nickname
 
-# 글로벌 CSV 데이터 수집 리스트
+# 글로벌 CSV 데이터 수집 리스트 및 자동 실행 플래그
 _csv_data_collection = []
+_is_auto_execution = False  # 스케줄러 자동 실행 여부
 
 def add_to_csv_collection(user_data: dict):
-    """CSV 데이터 수집 리스트에 사용자 정보 추가"""
-    global _csv_data_collection
-    _csv_data_collection.append(user_data)
+    """CSV 데이터 수집 리스트에 사용자 정보 추가 (자동 실행 시에만)"""
+    global _csv_data_collection, _is_auto_execution
+
+    # 자동 실행 중일 때만 CSV 데이터 수집
+    if _is_auto_execution:
+        _csv_data_collection.append(user_data)
+    else:
+        # 자동 실행이 아닐 때는 수집하지 않음
+        pass
 
 def save_csv_report():
     """수집된 데이터를 CSV 파일로 저장 (data/csv_exports 폴더)"""
@@ -771,15 +798,12 @@ async def send_rate_limit_notification(bot):
             color=0xffaa00
         )
 
-        # 남은 시간 계산
-        remaining_time = format_time_until(rate_limit_until)
+        # Unix 타임스탬프 계산
         rate_limit_unix = int(rate_limit_until.timestamp())
 
         embed.add_field(
             name="📊 현재 상황",
-            value=f"• **제한 해제 시간**: {rate_limit_until.strftime('%H:%M:%S')}\n"
-                  f"• **Unix 타임스탬프**: `{rate_limit_unix}`\n"
-                  f"• **남은 시간**: {remaining_time}\n"
+            value=f"• **제한 해제 시간**: <t:{rate_limit_unix}:F> (<t:{rate_limit_unix}:R>)\n"
                   f"• **대기열 크기**: {queue_manager.get_queue_size()}명\n"
                   f"• **재시도 대상**: {len(retry_counts)}명",
             inline=False
@@ -905,8 +929,8 @@ async def manual_execute_auto_roles(bot):
         )
         
         if current_queue_size > 0:
-            # 개선된 시간 표시 사용
-            time_str = format_estimated_time(current_queue_size, 36)
+            # 개선된 시간 표시 사용 (20초/명으로 계산)
+            time_str = format_estimated_time(current_queue_size, 20)
             embed.add_field(
                 name="⏰ 예상 완료 시간",
                 value=time_str,
@@ -1078,7 +1102,7 @@ async def process_queue_batch(bot):
         queue_manager.processing = True
 
         # 배치 크기 (한 번에 처리할 사용자 수)
-        batch_size = 3
+        batch_size = 5
         processed_users = []
 
         for _ in range(batch_size):
@@ -1118,8 +1142,14 @@ async def process_queue_batch(bot):
         if queue_size_after == 0 and queue_size_before > 0:
             print("🎉 모든 대기열 처리 완료!")
 
-            # CSV 보고서 저장
+            # CSV 보고서 저장 (자동 실행 시에만 데이터가 수집되었을 것임)
             csv_filepath = save_csv_report()
+
+            # 자동 실행 플래그 해제 (모든 처리 완료)
+            global _is_auto_execution
+            if _is_auto_execution:
+                _is_auto_execution = False
+                print("📋 CSV 데이터 수집 비활성화됨 (대기열 처리 완료)")
 
             # 완료 메시지 임베드 생성
             embed = discord.Embed(
@@ -1651,12 +1681,28 @@ async def process_single_user(bot, session, user_id):
 
                     if role_format:
                         # 역할 양식이 있으면 양식 적용 (MC 정보는 ❌[ MC ] ❌로 표시)
-                        # 콜사인 가져오기
                         user_callsign = None
+
+                        # 콜사인 조회 (양식 변경 판단용)
                         try:
                             user_callsign = callsign_manager.get_callsign(member.id)
+                            if user_callsign:
+                                print(f"  🏷️ 콜사인 조회됨: {user_callsign}")
                         except:
                             pass
+
+                        # 양식 동적 변경: {MC} | {NN/TT} 양식을 콜사인 유무에 따라 변경
+                        if role_format == "{MC} | {NN/TT}":
+                            if user_callsign:
+                                # 콜사인이 있으면: {CC} / {MC} | {NN/TT}
+                                role_format = "{CC} / {MC} | {NN/TT}"
+                                print(f"  ✏️ 콜사인 설정됨 → 양식 변경: {role_format}")
+                            else:
+                                # 콜사인이 없으면: {MC} | {NN/TT} 그대로
+                                print(f"  ℹ️ 콜사인 미설정 → 기본 양식 유지: {role_format}")
+                        elif '{CC}' in role_format and not user_callsign:
+                            # 다른 양식에 {CC}가 있지만 콜사인이 없는 경우
+                            print(f"  ⚠️ 양식에 {{CC}} 포함하지만 콜사인 미설정")
 
                         new_nickname = callsign_manager.apply_format_to_nickname(
                             role_format,
@@ -1872,8 +1918,14 @@ async def process_single_user(bot, session, user_id):
 
 async def execute_auto_roles(bot):
     """자동 역할 실행 함수 - 새로운 자동역할 관리자 사용 (비블로킹)"""
+    global _is_auto_execution
+
     try:
         print("🎯 자동 역할 실행 시작")
+
+        # 자동 실행 플래그 설정 (CSV 수집 활성화)
+        _is_auto_execution = True
+        print("📋 CSV 데이터 수집 활성화됨 (스케줄러 자동 실행)")
 
         # 자동역할 관리자에서 역할 목록 가져오기
         role_ids = auto_role_manager.get_roles()
@@ -1995,8 +2047,8 @@ async def execute_auto_roles(bot):
         )
         
         if current_queue_size > 0:
-            # 개선된 시간 표시 사용
-            time_str = format_estimated_time(current_queue_size, 36)
+            # 개선된 시간 표시 사용 (20초/명으로 계산)
+            time_str = format_estimated_time(current_queue_size, 20)
             embed.add_field(
                 name="⏰ 예상 완료 시간",
                 value=time_str,
@@ -2005,33 +2057,39 @@ async def execute_auto_roles(bot):
         
         # 429 오류 상태 정보 추가
         if rate_limit_detected:
+            rate_limit_unix = int(rate_limit_until.timestamp())
             embed.add_field(
                 name="⚠️ API 상태",
-                value=f"API 속도 제한이 감지되었습니다.\n해제 예정: {rate_limit_until.strftime('%H:%M:%S')}",
+                value=f"API 속도 제한이 감지되었습니다.\n해제 예정: <t:{rate_limit_unix}:F> (<t:{rate_limit_unix}:R>)",
                 inline=False
             )
         
         embed.timestamp = datetime.now()
-        
+
         await send_log_message(bot, SUCCESS_CHANNEL_ID, embed)
         await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
-        
+
     except Exception as e:
         print(f"❌ 자동 역할 실행 오류: {e}")
-        
+
         # 자동 역할 실행 실패 로그 전송
         embed = discord.Embed(
             title="❌ 자동 역할 실행 실패",
             description="자동 역할 실행 중 오류가 발생했습니다.",
             color=0xff0000
         )
-        
+
         embed.add_field(
             name="❌ 오류 내용",
             value=str(e)[:1000],
             inline=False
         )
-        
+
         embed.timestamp = datetime.now()
-        
+
         await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
+
+    finally:
+        # 자동 실행 플래그 해제 (CSV 수집 비활성화)
+        _is_auto_execution = False
+        print("📋 CSV 데이터 수집 비활성화됨 (자동 실행 종료)")

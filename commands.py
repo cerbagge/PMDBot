@@ -7,6 +7,7 @@ import os
 import json
 import time
 import datetime
+from utils import format_estimated_time
 
 # 안전한 import 처리
 try:
@@ -762,6 +763,11 @@ class SlashCommands(commands.Cog):
 
         return False
 
+    @staticmethod
+    def is_owner(interaction: discord.Interaction) -> bool:
+        # 서버 소유자인지 체크
+        return interaction.guild.owner_id == interaction.user.id
+
     async def send_long_message_via_webhook(self, interaction: discord.Interaction, embeds_data):
         """웹훅을 통해 긴 메시지를 여러 개로 나누어 전송"""
         try:
@@ -1278,9 +1284,9 @@ class SlashCommands(commands.Cog):
                     ephemeral=True
                 )
     
-    @app_commands.command(name="국가설정", description="[관리자] 디스코드 봇이 관리할 기본 국가(BASE_NATION)를 설정합니다")
+    @app_commands.command(name="국가설정", description="국가를 설정하는 명령어")
     @app_commands.describe(국가="설정할 국가 이름")
-    @app_commands.check(is_admin)
+    @app_commands.check(is_owner)
     async def 국가설정(self, interaction: discord.Interaction, 국가: str):
         """[관리자] 서버 BASE_NATION 설정"""
         await interaction.response.defer()
@@ -1547,7 +1553,7 @@ class SlashCommands(commands.Cog):
                 else:
                     embed.add_field(
                         name="🏷️ 적용된 닉네임 형식",
-                        value=f"**기본 형식:** `{mc_id} ㅣ {텍스트}`",
+                        value=f"**성공:** `{mc_id} | {{{텍스트}}}`",
                         inline=False
                     )
             else:
@@ -1567,6 +1573,13 @@ class SlashCommands(commands.Cog):
                 value=f"{nickname_error}\n`/확인` 명령어를 사용하여 수동으로 적용해주세요.",
                 inline=False
             )
+            # mc_id가 있으면 실패 형식 표시
+            if mc_id:
+                embed.add_field(
+                    name="🏷️ 권장 닉네임 형식",
+                    value=f"**실패:** `{mc_id} | {{NN/TT}}`\n(NN은 국가명, TT는 마을명)",
+                    inline=False
+                )
             embed.add_field(
                 name="ℹ️ 안내",
                 value="다음 변경은 15일 후에 가능합니다.",
@@ -1794,32 +1807,47 @@ class SlashCommands(commands.Cog):
                                 if data1.get('data') and data1['data']:
                                     mc_id = data1['data'][0].get('name')
 
-                    # 마크 ID가 있으면 사용, 없으면 현재 닉네임 사용
-                    if mc_id:
-                        base_name = mc_id
-                    else:
-                        # 마크 ID를 가져올 수 없으면 현재 닉네임에서 추출
-                        current_nick = 유저.display_name
-                        if 'ㅣ' in current_nick:
-                            base_name = current_nick.split('ㅣ')[0].strip()
-                        elif '|' in current_nick:
-                            base_name = current_nick.split('|')[0].strip()
-                        else:
-                            base_name = current_nick
+                    # 현재 닉네임에서 {CC} 부분만 교체
+                    current_nick = 유저.display_name
 
-                    # 새 닉네임 생성
-                    new_nick = f"{base_name} ㅣ {텍스트}"
+                    # {CC} 패턴 찾아서 교체
+                    import re
+                    cc_pattern = r'\{CC\}'
+
+                    if re.search(cc_pattern, current_nick):
+                        # {CC}를 새 콜사인으로 교체
+                        new_nick = re.sub(cc_pattern, 텍스트, current_nick)
+                    else:
+                        # {CC}가 없으면 역할 양식 무시하고 {MC} | {CC} 형식으로 강제 설정
+                        if mc_id:
+                            base_name = mc_id
+                        else:
+                            # 마크 ID를 가져올 수 없으면 현재 닉네임에서 추출
+                            if 'ㅣ' in current_nick:
+                                base_name = current_nick.split('ㅣ')[0].strip()
+                            elif '|' in current_nick:
+                                base_name = current_nick.split('|')[0].strip()
+                            else:
+                                base_name = current_nick
+
+                        # 새 닉네임 생성 (역할 양식 무시, | 구분자 사용)
+                        new_nick = f"{base_name} | {텍스트}"
 
                     # 닉네임 길이 제한 (32자)
                     if len(new_nick) > 32:
-                        # 콜사인을 우선 보존하고 이름 부분을 줄임
-                        max_name_len = 32 - len(f" ㅣ {텍스트}")
-                        if max_name_len > 0:
-                            truncated_name = base_name[:max_name_len]
-                            new_nick = f"{truncated_name} ㅣ {텍스트}"
+                        # {CC} 패턴이 있었다면 경고만 하고 변경 안 함
+                        if re.search(r'\{CC\}', current_nick):
+                            nick_error = "닉네임이 32자를 초과합니다"
+                            new_nick = current_nick  # 원래 닉네임 유지
                         else:
-                            # 콜사인이 너무 길어서 이름을 넣을 공간이 없는 경우
-                            new_nick = f"User ㅣ {텍스트[:27]}"  # 강제로 줄임
+                            # 콜사인을 우선 보존하고 이름 부분을 줄임 (| 구분자 사용)
+                            max_name_len = 32 - len(f" | {텍스트}")
+                            if max_name_len > 0:
+                                truncated_name = base_name[:max_name_len]
+                                new_nick = f"{truncated_name} | {텍스트}"
+                            else:
+                                # 콜사인이 너무 길어서 이름을 넣을 공간이 없는 경우
+                                new_nick = f"User | {텍스트[:27]}"  # 강제로 줄임
 
                     # 닉네임 변경 시도
                     await 유저.edit(nick=new_nick, reason=f"관리자 콜사인 설정: {interaction.user.name}")
@@ -3797,19 +3825,8 @@ class SlashCommands(commands.Cog):
         )
         
         if queue_size > 0:
-            estimated_time = queue_size * 36  # 대략 배치당 36초 추정
-            minutes = estimated_time // 60
-            seconds = estimated_time % 60
-            hours = minutes // 60
-            
-            if hours > 0:
-                minutes = minutes % 60
-                time_str = f"약 {hours}시간 {minutes}분 {seconds}초"
-            elif minutes > 0:
-                time_str = f"약 {minutes}분 {seconds}초"
-            else:
-                time_str = f"약 {seconds}초"
-
+            # utils.py의 format_estimated_time 함수 사용 (20초/명)
+            time_str = format_estimated_time(queue_size, 20)
             embed.add_field(
                 name="⏰ 예상 완료 시간",
                 value=time_str,
