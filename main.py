@@ -557,7 +557,7 @@ async def main():
         print("❌ Discord 토큰이 설정되지 않았습니다!")
         print("💡 .env 파일에 DISCORD_TOKEN을 설정해주세요.")
         return
-        
+
     # 봇 실행
     try:
         async with bot:
@@ -569,6 +569,13 @@ async def main():
         print(f"❌ 봇 실행 중 오류: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        # 봇 종료 시 스케줄러 정리
+        try:
+            from scheduler import stop_scheduler
+            stop_scheduler()
+        except Exception as e:
+            print(f"⚠️ 스케줄러 정리 실패: {e}")
 
 # 메인 실행
 if __name__ == "__main__":

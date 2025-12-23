@@ -1049,8 +1049,24 @@ def start_scheduler(bot):
         import traceback
         traceback.print_exc()
 
+def clear_queue():
+    """대기열 초기화"""
+    try:
+        from database_manager import db_manager
+
+        queue_size = len(db_manager.get_queue())
+        if queue_size > 0:
+            print(f"🗑️ 대기열 초기화 중... ({queue_size}명)")
+            db_manager.conn.execute("DELETE FROM queue")
+            db_manager.conn.commit()
+            print(f"   ✅ {queue_size}명의 대기열 항목 삭제 완료")
+        else:
+            print("   ℹ️ 대기열이 비어있음")
+    except Exception as e:
+        print(f"   ❌ 대기열 초기화 실패: {e}")
+
 def stop_scheduler():
-    """스케줄러 중지"""
+    """스케줄러 중지 및 대기열 초기화"""
     try:
         print("🛑 백그라운드 태스크 중지")
 
@@ -1063,6 +1079,9 @@ def stop_scheduler():
             print("   ✅ 자동 역할 체크 루프 중지")
 
         print("✅ 백그라운드 태스크 중지 완료")
+
+        # 대기열 초기화
+        clear_queue()
 
     except Exception as e:
         print(f"❌ 백그라운드 태스크 중지 실패: {e}")
