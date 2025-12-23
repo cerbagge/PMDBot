@@ -622,6 +622,11 @@ class CallsignManager:
 
         result = find_and_replace_brackets(format_string)
 
+        # {NN/TT} 레거시 변수 처리 (국가 우선, 없으면 마을)
+        if '{NN/TT}' in result:
+            nn_tt_value = variables.get('NN') or variables.get('TT') or ''
+            result = result.replace('{NN/TT}', nn_tt_value)
+
         # 남은 단순 변수 치환
         for var_name, var_value in variables.items():
             if var_value:
