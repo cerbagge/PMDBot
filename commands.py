@@ -1754,7 +1754,7 @@ class SlashCommands(commands.Cog):
             if not 유저 or not 텍스트:
                 await interaction.response.send_message("사용자와 콜사인 텍스트를 모두 입력해주세요.", ephemeral=True)
                 return
-            
+
             # 콜사인 유효성 검증
             from callsign_manager import validate_callsign
             is_valid, error_msg = validate_callsign(텍스트)
@@ -1766,26 +1766,27 @@ class SlashCommands(commands.Cog):
                 )
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
-            
+
+            # defer 호출 먼저 (DB 작업 및 API 조회 시간이 필요)
+            await interaction.response.defer(ephemeral=True)
+
             # 기존 콜사인 확인
             old_callsign = callsign_manager.get_callsign(유저.id)
-            
+
             # 권한 박탈 상태 확인
             is_banned = callsign_manager.is_banned(유저.id)
             ban_info = None
             if is_banned:
                 ban_info = callsign_manager.get_ban_info(유저.id)
-            
+
             # 관리자 권한으로 콜사인 설정 (모든 제약 무시)
             success, message = callsign_manager.admin_set_callsign(
                 user_id=유저.id,
                 callsign=텍스트,
                 admin_id=interaction.user.id
             )
-            
+
             if success:
-                # defer 호출 먼저 (API 조회 시간이 필요)
-                await interaction.response.defer(ephemeral=True)
 
                 # 닉네임 업데이트 시도
                 nick_changed = False
