@@ -261,6 +261,23 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
         elif town and not TOWN_ROLE_ENABLED:
             print(f"  ℹ️ `{town}` 마을 - 마을 역할 기능 비활성화됨")
 
+        # 국가 역할 변경 시 이전 국가 역할 제거
+        if NATION_ROLE_ENABLED and nation_role_manager:
+            try:
+                # 모든 국가 역할 매핑 조회
+                all_nation_mappings = nation_role_manager.get_all_nation_roles()
+
+                for nation_name, role_data in all_nation_mappings.items():
+                    if nation_name != nation:  # 현재 국가가 아닌 역할들만
+                        old_role = guild.get_role(role_data['role_id'])
+                        if old_role and old_role in member.roles:
+                            await member.remove_roles(old_role)
+                            changes.append(f"• **{nation_name}** 국가 역할 제거됨 (국가 변경)")
+                            print(f"  ✅ 이전 국가 역할 제거: {nation_name}")
+
+            except Exception as e:
+                print(f"  ⚠️ 이전 국가 역할 제거 실패: {e}")
+
         # 국가별 역할 부여 (UUID 기반 로직)
         try:
             from config import config
