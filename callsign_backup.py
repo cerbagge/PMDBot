@@ -81,27 +81,27 @@ class CallsignBackupManager:
     def restore_backup(self, backup_file: str) -> Tuple[bool, str]:
         """
         백업 파일로부터 복구
-        
+
         Args:
             backup_file: 복구할 백업 파일 경로
-        
+
         Returns:
             (성공 여부, 메시지)
         """
         try:
             if not os.path.exists(backup_file):
                 return False, "백업 파일이 존재하지 않습니다."
-            
+
             # 현재 파일 백업 (복구 전 안전 백업)
             if os.path.exists(self.callsign_file):
                 pre_restore_backup = f"{self.callsign_file}.pre_restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 shutil.copy2(self.callsign_file, pre_restore_backup)
                 print(f"🔒 복구 전 백업 생성: {pre_restore_backup}")
-            
+
             # 백업 파일 읽기
             with open(backup_file, 'r', encoding='utf-8') as f:
                 backup_data = json.load(f)
-            
+
             # 메타데이터가 있는 새 형식인지 확인
             if "metadata" in backup_data and "data" in backup_data:
                 callsign_data = backup_data["data"]
@@ -110,17 +110,95 @@ class CallsignBackupManager:
                 # 구 형식 백업 파일
                 callsign_data = backup_data
                 metadata = {"backup_time": "Unknown", "total_callsigns": len(callsign_data)}
-            
+
             # 원본 파일에 복구
             with open(self.callsign_file, 'w', encoding='utf-8') as f:
                 json.dump(callsign_data, f, ensure_ascii=False, indent=2)
-            
+
             print(f"✅ 백업 복구 완료: {backup_file}")
             return True, f"백업 복구 완료\n- 백업 시간: {metadata.get('backup_time', 'Unknown')}\n- 복구된 콜사인: {metadata.get('total_callsigns', len(callsign_data))}개"
-            
+
         except Exception as e:
             print(f"❌ 복구 실패: {str(e)}")
             return False, f"복구 실패: {str(e)}"
+
+    def restore_missing_only(self, backup_file: str) -> Tuple[bool, str, Dict]:
+        """
+        백업 파일에서 현재 DB에 없는 유저만 복구 (선택적 복구)
+
+        Args:
+            backup_file: 복구할 백업 파일 경로
+
+        Returns:
+            (성공 여부, 메시지, 통계 딕셔너리)
+        """
+        try:
+            if not os.path.exists(backup_file):
+                return False, "백업 파일이 존재하지 않습니다.", {}
+
+            # 백업 파일 읽기
+            with open(backup_file, 'r', encoding='utf-8') as f:
+                backup_data = json.load(f)
+
+            # 메타데이터가 있는 새 형식인지 확인
+            if "metadata" in backup_data and "data" in backup_data:
+                backup_callsigns = backup_data["data"]
+            else:
+                # 구 형식 백업 파일
+                backup_callsigns = backup_data
+
+            # 현재 콜사인 파일 읽기
+            current_callsigns = {}
+            if os.path.exists(self.callsign_file):
+                with open(self.callsign_file, 'r', encoding='utf-8') as f:
+                    current_callsigns = json.load(f)
+
+            # 누락된 유저 찾기
+            added_users = {}
+            skipped_users = {}
+
+            # 메타데이터 필드 무시 (count, description 등)
+            metadata_fields = {"count", "description", "metadata"}
+
+            for user_id, callsign_info in backup_callsigns.items():
+                # 메타데이터 필드는 스킵
+                if user_id in metadata_fields:
+                    continue
+
+                # Discord User ID는 숫자로만 구성되어야 함 (검증)
+                if not user_id.isdigit():
+                    continue
+
+                if user_id not in current_callsigns:
+                    # DB에 없는 유저 -> 추가
+                    added_users[user_id] = callsign_info
+                    current_callsigns[user_id] = callsign_info
+                else:
+                    # 이미 존재하는 유저 -> 스킵
+                    skipped_users[user_id] = callsign_info
+
+            # 업데이트된 콜사인 파일 저장
+            if added_users:
+                with open(self.callsign_file, 'w', encoding='utf-8') as f:
+                    json.dump(current_callsigns, f, ensure_ascii=False, indent=2)
+                print(f"✅ 누락된 콜사인 {len(added_users)}개 추가 완료")
+
+            stats = {
+                "total_backup": len(backup_callsigns),
+                "added": len(added_users),
+                "skipped": len(skipped_users),
+                "added_users": added_users
+            }
+
+            message = f"선택적 복구 완료\n- 백업 총 콜사인: {len(backup_callsigns)}개\n- 새로 추가됨: {len(added_users)}개\n- 이미 존재함 (스킵): {len(skipped_users)}개"
+
+            return True, message, stats
+
+        except Exception as e:
+            print(f"❌ 선택적 복구 실패: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return False, f"복구 실패: {str(e)}", {}
     
     def list_backups(self, limit: int = 10) -> List[Dict]:
         """
