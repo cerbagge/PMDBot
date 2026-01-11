@@ -8,8 +8,17 @@
 commands/
 ├── __init__.py          # 명령어 자동 로더
 ├── README.md            # 이 문서
+│
+├── user/                # 일반 유저 명령어
+│   ├── __init__.py
+│   └── basic/           # 📖 기본 명령어 (2개)
+│       ├── __init__.py
+│       ├── help.py              # /도움말
+│       └── check.py             # /확인
+│
 └── admin/               # 관리자 전용 명령어
     ├── __init__.py
+    ├── test.py                  # /테스트
     │
     ├── callsigns/       # 🎭 콜사인 관련 (2개)
     │   ├── __init__.py
@@ -38,60 +47,58 @@ commands/
     ├── scheduler/       # ⏰ 스케줄러 관련 (4개)
     │   ├── __init__.py
     │   ├── exception.py         # /예외설정
-    │   ├── auto_run.py          # /자동실행
+    │   ├── auto_role.py         # /자동실행
     │   ├── auto_start.py        # /자동실행시작
     │   └── schedule_check.py    # /스케줄확인
     │
-    ├── system/          # ⚙️ 시스템 관련 (3개)
-    │   ├── __init__.py
-    │   ├── log_view.py          # /로그조회
-    │   ├── log_manage.py        # /로그관리
-    │   └── database.py          # /데이터베이스
-    │
-    └── basic/           # 📖 기본 명령어 (3개)
+    └── system/          # ⚙️ 시스템 관련 (3개)
         ├── __init__.py
-        ├── help.py              # /도움말
-        ├── check.py             # /확인
-        └── test.py              # /테스트
+        ├── log_view.py          # /로그조회
+        ├── log_manage.py        # /로그관리
+        └── database.py          # /데이터베이스
 ```
 
 ## 📋 명령어 분류
 
-### 🎭 콜사인 (callsigns/)
+### 👥 일반 유저 (user/basic/)
+- `/도움말` - 봇의 모든 명령어 확인
+- `/확인` - 자신의 국적 확인하고 역할 받기
+
+### 🛡️ 관리자 전용 (admin/)
+
+#### 🧪 테스트
+- `/테스트` - 봇의 기본 기능 테스트
+
+#### 🎭 콜사인 (callsigns/)
 - `/콜사인` - 개인 콜사인(별명) 설정 (15일 쿨타임)
 - `/콜사인관리` - 사용자 콜사인 관리
 
-### 📝 대기열 (queue/)
+#### 📝 대기열 (queue/)
 - `/대기열추가` - 유저/역할 멤버를 대기열에 추가
 - `/대기열상태` - 현재 대기열 상태 확인
 - `/대기열초기화` - 대기열 초기화
 - `/서버대기열` - 서버 접속 대기열 인원 확인
 
-### 📨 MF (MF/)
+#### 📨 MF (MF/)
 - `&MF` - 채널 이름 변경 및 대기열 추가 (메시지 핸들러)
 
-### 🤝 설정 (setting/)
+#### 🤝 설정 (setting/)
 - `/동맹설정` - 동맹 관리 시스템
 - `/동맹확인` - 모든 멤버의 동맹 역할 재확인
 - `/국가설정` - 국가 설정
 - `/마을역할` - 마을과 역할 연동
 - `/마을테스트` - 마을 검증 기능 테스트
 
-### ⏰ 스케줄러 (scheduler/)
+#### ⏰ 스케줄러 (scheduler/)
 - `/예외설정` - 자동실행 예외 대상 관리
 - `/자동실행` - 자동 등록 역할 설정
 - `/자동실행시작` - 자동 역할 부여 수동 시작
 - `/스케줄확인` - 자동 실행 스케줄 정보 확인
 
-### ⚙️ 시스템 (system/)
+#### ⚙️ 시스템 (system/)
 - `/로그조회` - 시스템 로그 조회
 - `/로그관리` - 로그 시스템 관리
 - `/데이터베이스` - 데이터베이스 조회 및 관리
-
-### 📖 기본 (basic/)
-- `/도움말` - 봇의 모든 명령어 확인
-- `/확인` - 자신의 국적 확인하고 역할 받기
-- `/테스트` - 봇의 기본 기능 테스트
 
 ---
 
@@ -100,7 +107,7 @@ commands/
 ### 슬래시 명령어 예시
 
 ```python
-# commands/admin/category/command_name.py
+# commands/user/basic/command_name.py 또는 commands/admin/category/command_name.py
 
 import discord
 from discord import app_commands
@@ -147,13 +154,13 @@ async def message_handler(bot, message):
 ## ➕ 명령어 추가 방법
 
 1. **적절한 카테고리 폴더 선택**
+   - 일반 유저용 → `user/basic/`
    - 콜사인 관련 → `admin/callsigns/`
    - 대기열 관련 → `admin/queue/`
    - &MF 관련 → `admin/MF/`
    - 설정 관련 → `admin/setting/`
    - 스케줄러 관련 → `admin/scheduler/`
    - 시스템 관련 → `admin/system/`
-   - 기본 명령어 → `admin/basic/`
 
 2. **`.py` 파일 생성**
    - 파일명: 영문, 숫자, 언더스코어(_)만 사용
@@ -167,7 +174,7 @@ async def message_handler(bot, message):
 
 ## ⚠️ 주의사항
 
-- 모든 명령어는 `admin/` 폴더 아래에 위치
+- 일반 유저 명령어는 `user/` 폴더에, 관리자 전용은 `admin/` 폴더에 위치
 - 각 명령어 파일은 독립적으로 작동해야 함
 - 공통 기능은 별도 유틸리티 모듈로 분리
 - 파일명은 snake_case 사용 권장
@@ -178,5 +185,7 @@ async def message_handler(bot, message):
 ## 📊 통계
 
 - **총 명령어 수**: 22개
-- **카테고리 수**: 7개
+  - **일반 유저**: 2개
+  - **관리자 전용**: 20개
+- **카테고리 수**: 8개 (user/basic, admin/callsigns, admin/queue, admin/MF, admin/setting, admin/scheduler, admin/system, admin/test)
 - **자동 로드**: ✅ 활성화
