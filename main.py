@@ -286,8 +286,32 @@ async def on_ready():
     else:
         print("ℹ️ 콜사인 기능이 비활성화되어 백업 스케줄러를 시작하지 않습니다.")
         bot.backup_manager = None
-        
-    print("🚀 봇이 완전히 준비되었습니다!")
+
+    # ===== 5단계: Bulk 데이터 자동 업데이트 시작 =====
+    try:
+        from bulk_updater import bulk_data_manager
+
+        print("\n" + "="*60)
+        print("📊 Bulk 데이터 자동 업데이트 시작")
+        print("="*60)
+        print("   - 업데이트 주기: 15분")
+        print("   - API: https://api.planetearth.kr/resident/bulk")
+
+        # 백그라운드에서 자동 업데이트 시작
+        asyncio.create_task(bulk_data_manager.start_auto_update())
+
+        # bot 객체에 저장 (다른 모듈에서 사용 가능)
+        bot.bulk_data_manager = bulk_data_manager
+
+        print("✅ Bulk 데이터 자동 업데이트 시작됨")
+
+    except Exception as e:
+        print(f"❌ Bulk 데이터 자동 업데이트 시작 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        bot.bulk_data_manager = None
+
+    print("\n🚀 봇이 완전히 준비되었습니다!")
 
 @bot.event
 async def on_message(message):
@@ -295,14 +319,8 @@ async def on_message(message):
     try:
         # &MF 명령어 확인 (메시지 내 모든 줄 검사)
         if '&MF' in message.content:
-            # 허용된 봇 ID 목록
-            ALLOWED_BOT_IDS = [557628352828014614, 1325579039888511056]
-
-            # 허용된 봇이 아니면 무시
-            if message.author.id not in ALLOWED_BOT_IDS:
-                return
-
             import re
+            from datetime import datetime
 
             # 메시지에서 &MF 명령어가 있는 줄 찾기
             lines = message.content.split('\n')
@@ -322,6 +340,9 @@ async def on_message(message):
             print(f"📝 원본 메시지: {message.content}")
             print(f"📝 처리된 내용: {content}")
 
+            # {대기열} 키워드 확인
+            is_queue_command = '{대기열}' in content or '{큐}' in content
+
             # 디스코드 ID 추출
             # 1. 유저 멘션 형태 (<@123456789> 또는 <@!123456789>)
             user_mention_match = re.search(r'<@!?(\d{15,20})>', content)
@@ -332,12 +353,60 @@ async def on_message(message):
                 # 2. 숫자만 있는 경우
                 discord_id_match = re.search(r'(\d{15,20})', content)
                 if not discord_id_match:
-                    await message.channel.send("디스코드 ID를 찾을 수 없습니다. 사용법: `&MF 디스코드ID` 또는 `&MF @유저멘션`")
+                    await message.channel.send("디스코드 ID를 찾을 수 없습니다. 사용법: `&MF 디스코드ID` 또는 `&MF @유저멘션` 또는 `&MF {대기열} 디스코드ID`")
                     return
                 discord_id = int(discord_id_match.group(1))
                 print(f"✅ 숫자에서 ID 추출: {discord_id}")
 
             print(f"🎯 최종 Discord ID: {discord_id}")
+
+            # {대기열} 명령어 처리 (모든 봇에서 동작)
+            if is_queue_command:
+                print(f"📋 대기열 추가 명령어 감지: {discord_id}")
+                try:
+                    from queue_manager import queue_manager
+
+                    # 5초 이내 중복 요청 방지
+                    if not hasattr(bot, '_last_queue_request'):
+                        bot._last_queue_request = {}
+
+                    current_time = datetime.now()
+                    last_request_time = bot._last_queue_request.get(discord_id)
+
+                    if last_request_time:
+                        time_diff = (current_time - last_request_time).total_seconds()
+                        if time_diff < 5:
+                            print(f"⏱️ 5초 이내 중복 요청 무시: {discord_id} (경과: {time_diff:.1f}초)")
+                            return
+
+                    # 대기열에 추가
+                    if queue_manager.add_user(discord_id):
+                        bot._last_queue_request[discord_id] = current_time
+                        current_queue_size = queue_manager.get_queue_size()
+                        await message.channel.send(
+                            f"✅ 대기열에 추가되었습니다!\n"
+                            f"Discord ID: `{discord_id}`\n"
+                            f"현재 대기열: **{current_queue_size}명**\n"
+                            f"대기열이 자동으로 처리됩니다."
+                        )
+                        print(f"✅ 대기열 추가 성공: {discord_id} (현재 {current_queue_size}명)")
+                    else:
+                        await message.channel.send(
+                            f"ℹ️ 이미 대기열에 있습니다.\n"
+                            f"Discord ID: `{discord_id}`"
+                        )
+                        print(f"ℹ️ 이미 대기열에 있음: {discord_id}")
+                except Exception as queue_error:
+                    await message.channel.send(f"❌ 대기열 추가 중 오류가 발생했습니다: {queue_error}")
+                    print(f"❌ 대기열 추가 오류: {queue_error}")
+                return  # 대기열 추가 후 종료
+
+            # 허용된 봇 ID 목록 (채널 이름 변경 기능에만 적용)
+            ALLOWED_BOT_IDS = [557628352828014614, 1325579039888511056]
+
+            # 허용된 봇이 아니면 무시
+            if message.author.id not in ALLOWED_BOT_IDS:
+                return
 
             # database_manager 로드
             try:
@@ -390,21 +459,32 @@ async def on_message(message):
             nation_name_styled = convert_to_bold_sans_serif(nation_name)
             new_channel_name = f"{nation_name_styled} 대사관"
 
-            # nationRanks 정보 가져오기
-            nation_ranks = nation_info.get('nationRanks', '정보 없음')
+            # nationRanks, townRanks 정보 가져오기
+            nation_ranks = nation_info.get('nation_ranks', '정보 없음')
+            town_ranks = nation_info.get('town_ranks', '정보 없음')
 
             # 현재 채널 이름 변경
             try:
                 old_name = message.channel.name
                 await message.channel.edit(name=new_channel_name)
+
+                # 직위 정보 구성
+                rank_info = []
+                if nation_ranks and nation_ranks != '정보 없음':
+                    rank_info.append(f"국가 계급: `{nation_ranks}`")
+                if town_ranks and town_ranks != '정보 없음':
+                    rank_info.append(f"마을 계급: `{town_ranks}`")
+
+                rank_display = "\n".join(rank_info) if rank_info else "직위: `정보 없음`"
+
                 await message.channel.send(
                     f"✅ 채널 이름이 변경되었습니다!\n"
                     f"사용자: `{minecraft_name}` (Discord ID: `{discord_id}`)\n"
                     f"국가: `{nation_name}`\n"
-                    f"직위: `{nation_ranks}`\n"
+                    f"{rank_display}\n"
                     f"변경: `{old_name}` → `{new_channel_name}`"
                 )
-                print(f"✅ 채널 이름 변경 성공: {old_name} -> {new_channel_name} (직위: {nation_ranks})")
+                print(f"✅ 채널 이름 변경 성공: {old_name} -> {new_channel_name} (국가 계급: {nation_ranks}, 마을 계급: {town_ranks})")
             except discord.Forbidden:
                 await message.channel.send("❌ 채널 이름을 변경할 권한이 없습니다.")
                 print(f"❌ 채널 이름 변경 권한 없음: {message.channel.name}")
@@ -419,6 +499,13 @@ async def on_message(message):
         import traceback
         traceback.print_exc()
     finally:
+        # 새로운 명령어 시스템의 메시지 핸들러 호출
+        if hasattr(bot, 'command_loader'):
+            try:
+                await bot.command_loader.handle_message(message)
+            except Exception as handler_error:
+                print(f"❌ 메시지 핸들러 오류: {handler_error}")
+
         # 다른 명령어도 처리할 수 있도록 process_commands 호출
         await bot.process_commands(message)
 
@@ -479,20 +566,26 @@ async def on_member_join(member):
                 print(f"⚠️ 예외 사용자 환영 메시지 전송 실패: {e}")
             return
 
-        # 대기열에 추가
+        # 대기열에 우선 추가 (맨 앞에 추가)
         try:
             # 이미 대기열에 있는지 확인
             if hasattr(queue_manager, 'is_user_in_queue') and queue_manager.is_user_in_queue(member.id):
                 print(f"ℹ️ 이미 대기열에 있음: {member.display_name}")
             else:
-                queue_manager.add_user(member.id)
-                print(f"✅ 대기열에 추가됨: {member.display_name} (현재 대기열: {queue_manager.get_queue_size()}명)")
+                # 우선순위로 맨 앞에 추가
+                if hasattr(queue_manager, 'add_user_priority'):
+                    queue_manager.add_user_priority(member.id)
+                    print(f"✅ 대기열 1순위로 추가됨: {member.display_name} (현재 대기열: {queue_manager.get_queue_size()}명)")
+                else:
+                    # fallback: 일반 추가
+                    queue_manager.add_user(member.id)
+                    print(f"✅ 대기열에 추가됨: {member.display_name} (현재 대기열: {queue_manager.get_queue_size()}명)")
 
                 # 성공 채널에 알림 (선택사항)
                 try:
                     success_channel = bot.get_channel(config.SUCCESS_CHANNEL_ID)
                     if success_channel:
-                        await success_channel.send(f"📝 새 멤버 대기열 추가: {member.mention} (대기: {queue_manager.get_queue_size()}명)")
+                        await success_channel.send(f"📝 새 멤버 우선 대기열 추가: {member.mention} (대기: {queue_manager.get_queue_size()}명)")
                 except Exception as e:
                     print(f"⚠️ 대기열 추가 알림 전송 실패: {e}")
         except Exception as e:
@@ -530,25 +623,28 @@ async def on_error(event, *args, **kwargs):
 
 # 확장 로드 함수
 async def load_extensions():
-    """확장 모듈 로드"""
-    extensions = ["commands"]  # scheduler는 별도로 처리하므로 제외
-    
-    print("📦 확장 로드 시작...")
-    for extension in extensions:
-        try:
-            # 이미 로드된 경우 언로드 후 다시 로드
-            if extension in bot.extensions:
-                await bot.unload_extension(extension)
-                print(f"🔄 기존 확장 언로드됨: {extension}")
-                
-            await bot.load_extension(extension)
-            print(f"✅ 확장 로드됨: {extension}")
-        except Exception as e:
-            print(f"❌ 확장 로드 실패 {extension}: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    print("📦 확장 로드 완료!")
+    """확장 모듈 로드 - 새로운 commands 폴더 시스템"""
+
+    print("📦 명령어 로드 시작...")
+
+    try:
+        # 새로운 commands 폴더의 자동 로더 사용
+        from commands import setup
+
+        # 명령어 자동 로드
+        command_loader = setup(bot)
+
+        # bot 객체에 command_loader 저장 (on_message에서 사용)
+        bot.command_loader = command_loader
+
+        print("✅ 명령어 자동 로더 설정 완료")
+
+    except Exception as e:
+        print(f"❌ 명령어 로드 실패: {e}")
+        import traceback
+        traceback.print_exc()
+
+    print("📦 명령어 로드 완료!")
 
 async def main():
     """메인 실행 함수"""

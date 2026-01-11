@@ -66,10 +66,25 @@ class DatabaseManager:
                 nation_uuid TEXT,
                 town_name TEXT,
                 town_uuid TEXT,
+                nation_ranks TEXT,
+                town_ranks TEXT,
                 changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (discord_id) REFERENCES users(discord_id)
             )
         ''')
+
+        # nation_ranks, town_ranks 컬럼 추가 (기존 테이블에 없는 경우)
+        try:
+            cursor.execute('ALTER TABLE nation_history ADD COLUMN nation_ranks TEXT')
+            print("✅ nation_history 테이블에 nation_ranks 컬럼 추가됨")
+        except sqlite3.OperationalError:
+            pass  # 이미 존재하는 경우 무시
+
+        try:
+            cursor.execute('ALTER TABLE nation_history ADD COLUMN town_ranks TEXT')
+            print("✅ nation_history 테이블에 town_ranks 컬럼 추가됨")
+        except sqlite3.OperationalError:
+            pass  # 이미 존재하는 경우 무시
 
         # 인덱스 생성 (조회 성능 향상)
         cursor.execute('''
@@ -130,6 +145,56 @@ class DatabaseManager:
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_callsign_history_discord_id
             ON callsign_history(discord_id)
+        ''')
+
+        # 모든 마인크래프트 플레이어 정보 테이블 (Bulk API 전체 데이터)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS all_players (
+                uuid TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                nation TEXT,
+                town TEXT,
+                nation_ranks TEXT,
+                town_ranks TEXT,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 모든 플레이어 인덱스
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_all_players_name
+            ON all_players(name)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_all_players_nation
+            ON all_players(nation)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_all_players_town
+            ON all_players(town)
+        ''')
+
+        # 콜사인 쿨타임 테이블 (신규)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS callsign_cooldowns (
+                discord_id INTEGER PRIMARY KEY,
+                cooldown_end TIMESTAMP NOT NULL,
+                set_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (discord_id) REFERENCES users(discord_id)
+            )
+        ''')
+
+        # 콜사인 쿨타임 인덱스
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_cooldown_discord_id
+            ON callsign_cooldowns(discord_id)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_cooldown_end
+            ON callsign_cooldowns(cooldown_end)
         ''')
 
         conn.commit()
@@ -482,7 +547,8 @@ class DatabaseManager:
             return 0
 
     def add_nation_history(self, discord_id: int, nation_name: str = None, nation_uuid: str = None,
-                           town_name: str = None, town_uuid: str = None) -> bool:
+                           town_name: str = None, town_uuid: str = None,
+                           nation_ranks: str = None, town_ranks: str = None) -> bool:
         """
         국가/마을 히스토리 추가
 
@@ -492,6 +558,8 @@ class DatabaseManager:
             nation_uuid: 국가 UUID
             town_name: 마을 이름
             town_uuid: 마을 UUID
+            nation_ranks: 국가 계급/직위
+            town_ranks: 마을 계급/직위
 
         Returns:
             성공 여부
@@ -502,7 +570,7 @@ class DatabaseManager:
 
             # 가장 최근 국가 히스토리 조회
             cursor.execute('''
-                SELECT nation_name, nation_uuid, town_name, town_uuid
+                SELECT nation_name, nation_uuid, town_name, town_uuid, nation_ranks, town_ranks
                 FROM nation_history
                 WHERE discord_id = ?
                 ORDER BY changed_at DESC
@@ -516,21 +584,23 @@ class DatabaseManager:
                 if (last_record['nation_name'] == nation_name and
                     last_record['nation_uuid'] == nation_uuid and
                     last_record['town_name'] == town_name and
-                    last_record['town_uuid'] == town_uuid):
+                    last_record['town_uuid'] == town_uuid and
+                    last_record['nation_ranks'] == nation_ranks and
+                    last_record['town_ranks'] == town_ranks):
                     # 변경사항 없음
                     conn.close()
                     return True
 
             # 새 히스토리 추가
             cursor.execute('''
-                INSERT INTO nation_history (discord_id, nation_name, nation_uuid, town_name, town_uuid)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (discord_id, nation_name, nation_uuid, town_name, town_uuid))
+                INSERT INTO nation_history (discord_id, nation_name, nation_uuid, town_name, town_uuid, nation_ranks, town_ranks)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (discord_id, nation_name, nation_uuid, town_name, town_uuid, nation_ranks, town_ranks))
 
             conn.commit()
             conn.close()
 
-            print(f"📝 국가 히스토리 추가: {discord_id} - {nation_name}/{town_name}")
+            print(f"📝 국가 히스토리 추가: {discord_id} - {nation_name}/{town_name} (국가 계급: {nation_ranks}, 마을 계급: {town_ranks})")
             return True
 
         except Exception as e:
@@ -582,6 +652,8 @@ class DatabaseManager:
                 'nation_uuid': str,
                 'town_name': str,
                 'town_uuid': str,
+                'nation_ranks': str,
+                'town_ranks': str,
                 'changed_at': str
             }
         """
@@ -590,7 +662,7 @@ class DatabaseManager:
             cursor = conn.cursor()
 
             cursor.execute('''
-                SELECT nation_name, nation_uuid, town_name, town_uuid, changed_at
+                SELECT nation_name, nation_uuid, town_name, town_uuid, nation_ranks, town_ranks, changed_at
                 FROM nation_history
                 WHERE discord_id = ?
                 ORDER BY changed_at DESC
@@ -666,8 +738,13 @@ class DatabaseManager:
             cursor = conn.cursor()
 
             # 기존 콜사인 확인
-            cursor.execute('SELECT callsign FROM callsigns WHERE discord_id = ?', (discord_id,))
+            cursor.execute('SELECT callsign, admin_override FROM callsigns WHERE discord_id = ?', (discord_id,))
             existing = cursor.fetchone()
+
+            # 이미 같은 콜사인이 저장되어 있으면 건너뛰기
+            if existing and existing[0] == callsign and existing[1] == (1 if admin_override else 0):
+                conn.close()
+                return True  # 중복 저장 방지, 로그 없이 조용히 성공 반환
 
             if existing:
                 # 기존 콜사인이 있으면 업데이트
@@ -676,6 +753,14 @@ class DatabaseManager:
                     SET callsign = ?, set_at = ?, admin_override = ?
                     WHERE discord_id = ?
                 ''', (callsign, datetime.now(), 1 if admin_override else 0, discord_id))
+
+                # 콜사인이 변경된 경우에만 히스토리에 추가
+                cursor.execute('''
+                    INSERT INTO callsign_history (discord_id, callsign, set_at, admin_override)
+                    VALUES (?, ?, ?, ?)
+                ''', (discord_id, callsign, datetime.now(), 1 if admin_override else 0))
+
+                print(f"✅ DB에 콜사인 업데이트 완료: {discord_id} -> {callsign}")
             else:
                 # 새로운 콜사인 추가
                 cursor.execute('''
@@ -683,16 +768,17 @@ class DatabaseManager:
                     VALUES (?, ?, ?, ?)
                 ''', (discord_id, callsign, datetime.now(), 1 if admin_override else 0))
 
-            # 콜사인 히스토리에 추가
-            cursor.execute('''
-                INSERT INTO callsign_history (discord_id, callsign, set_at, admin_override)
-                VALUES (?, ?, ?, ?)
-            ''', (discord_id, callsign, datetime.now(), 1 if admin_override else 0))
+                # 새로운 콜사인 히스토리에 추가
+                cursor.execute('''
+                    INSERT INTO callsign_history (discord_id, callsign, set_at, admin_override)
+                    VALUES (?, ?, ?, ?)
+                ''', (discord_id, callsign, datetime.now(), 1 if admin_override else 0))
+
+                print(f"✅ DB에 콜사인 저장 완료: {discord_id} -> {callsign}")
 
             conn.commit()
             conn.close()
 
-            print(f"✅ DB에 콜사인 저장 완료: {discord_id} -> {callsign}")
             return True
 
         except Exception as e:
@@ -786,6 +872,338 @@ class DatabaseManager:
         except Exception as e:
             print(f"❌ DB 콜사인 삭제 실패: {e}")
             return False
+
+    def set_cooldown(self, discord_id: int, cooldown_end: datetime) -> bool:
+        """
+        사용자 콜사인 쿨타임 설정
+
+        Args:
+            discord_id: 디스코드 사용자 ID
+            cooldown_end: 쿨타임 종료 시간
+
+        Returns:
+            성공 여부
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            # 기존 쿨타임 확인
+            cursor.execute('SELECT discord_id FROM callsign_cooldowns WHERE discord_id = ?', (discord_id,))
+            existing = cursor.fetchone()
+
+            if existing:
+                # 기존 쿨타임 업데이트
+                cursor.execute('''
+                    UPDATE callsign_cooldowns
+                    SET cooldown_end = ?, set_at = ?
+                    WHERE discord_id = ?
+                ''', (cooldown_end, datetime.now(), discord_id))
+            else:
+                # 새로운 쿨타임 추가
+                cursor.execute('''
+                    INSERT INTO callsign_cooldowns (discord_id, cooldown_end, set_at)
+                    VALUES (?, ?, ?)
+                ''', (discord_id, cooldown_end, datetime.now()))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            print(f"❌ DB 쿨타임 저장 실패: {e}")
+            return False
+
+    def get_cooldown(self, discord_id: int) -> Optional[datetime]:
+        """
+        사용자 콜사인 쿨타임 조회
+
+        Args:
+            discord_id: 디스코드 사용자 ID
+
+        Returns:
+            쿨타임 종료 시간 (없으면 None)
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('SELECT cooldown_end FROM callsign_cooldowns WHERE discord_id = ?', (discord_id,))
+            result = cursor.fetchone()
+            conn.close()
+
+            if result:
+                # 문자열을 datetime 객체로 변환
+                cooldown_str = result['cooldown_end']
+                return datetime.fromisoformat(cooldown_str) if isinstance(cooldown_str, str) else cooldown_str
+
+            return None
+
+        except Exception as e:
+            print(f"❌ DB 쿨타임 조회 실패: {e}")
+            return None
+
+    def delete_cooldown(self, discord_id: int) -> bool:
+        """
+        사용자 콜사인 쿨타임 삭제
+
+        Args:
+            discord_id: 디스코드 사용자 ID
+
+        Returns:
+            성공 여부
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('DELETE FROM callsign_cooldowns WHERE discord_id = ?', (discord_id,))
+
+            conn.commit()
+            conn.close()
+
+            print(f"✅ DB에서 쿨타임 삭제 완료: {discord_id}")
+            return True
+
+        except Exception as e:
+            print(f"❌ DB 쿨타임 삭제 실패: {e}")
+            return False
+
+    def delete_all_cooldowns(self) -> int:
+        """
+        모든 사용자의 콜사인 쿨타임 삭제
+
+        Returns:
+            삭제된 레코드 수
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('DELETE FROM callsign_cooldowns')
+            deleted_count = cursor.rowcount
+
+            conn.commit()
+            conn.close()
+
+            print(f"✅ DB에서 모든 쿨타임 삭제 완료: {deleted_count}개")
+            return deleted_count
+
+        except Exception as e:
+            print(f"❌ DB 모든 쿨타임 삭제 실패: {e}")
+            return 0
+
+    # ===== 모든 플레이어 정보 관리 (all_players 테이블) =====
+
+    def upsert_all_players(self, players: List[Dict]) -> int:
+        """
+        Bulk API에서 가져온 모든 플레이어 정보를 DB에 저장/업데이트
+
+        Args:
+            players: 플레이어 정보 리스트 [{'uuid': ..., 'name': ..., 'nation': ..., 'town': ..., 'nationRanks': ..., 'townRanks': ...}]
+
+        Returns:
+            저장/업데이트된 레코드 수
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            saved_count = 0
+
+            for player in players:
+                uuid = player.get('uuid')
+                name = player.get('name')
+                nation = player.get('nation')
+                town = player.get('town')
+                nation_ranks = player.get('nationRanks', '')
+                town_ranks = player.get('townRanks', '')
+
+                if not uuid or not name:
+                    continue
+
+                # UPSERT (INSERT OR REPLACE)
+                cursor.execute('''
+                    INSERT OR REPLACE INTO all_players
+                    (uuid, name, nation, town, nation_ranks, town_ranks, last_updated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (uuid, name, nation, town, nation_ranks, town_ranks, datetime.now()))
+
+                saved_count += 1
+
+            conn.commit()
+            conn.close()
+
+            return saved_count
+
+        except Exception as e:
+            print(f"❌ 모든 플레이어 정보 저장 실패: {e}")
+            return 0
+
+    def get_player_by_uuid(self, uuid: str) -> Optional[Dict]:
+        """
+        UUID로 플레이어 정보 조회 (all_players 테이블)
+
+        Args:
+            uuid: Minecraft UUID
+
+        Returns:
+            플레이어 정보 또는 None
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('SELECT * FROM all_players WHERE uuid = ?', (uuid,))
+            row = cursor.fetchone()
+
+            conn.close()
+
+            if row:
+                return dict(row)
+            return None
+
+        except Exception as e:
+            print(f"❌ 플레이어 UUID 조회 실패: {e}")
+            return None
+
+    def get_player_by_name(self, name: str) -> Optional[Dict]:
+        """
+        이름으로 플레이어 정보 조회 (all_players 테이블)
+
+        Args:
+            name: Minecraft 닉네임
+
+        Returns:
+            플레이어 정보 또는 None
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('SELECT * FROM all_players WHERE name = ? COLLATE NOCASE', (name,))
+            row = cursor.fetchone()
+
+            conn.close()
+
+            if row:
+                return dict(row)
+            return None
+
+        except Exception as e:
+            print(f"❌ 플레이어 이름 조회 실패: {e}")
+            return None
+
+    def get_all_players(self, limit: int = None, offset: int = 0) -> List[Dict]:
+        """
+        모든 플레이어 조회 (all_players 테이블)
+
+        Args:
+            limit: 조회할 최대 개수 (None이면 전체 조회)
+            offset: 건너뛸 개수
+
+        Returns:
+            플레이어 리스트
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            if limit is None:
+                cursor.execute('''
+                    SELECT * FROM all_players
+                    ORDER BY last_updated DESC
+                ''')
+            else:
+                cursor.execute('''
+                    SELECT * FROM all_players
+                    ORDER BY last_updated DESC
+                    LIMIT ? OFFSET ?
+                ''', (limit, offset))
+
+            rows = cursor.fetchall()
+            conn.close()
+
+            return [dict(row) for row in rows]
+
+        except Exception as e:
+            print(f"❌ 모든 플레이어 조회 실패: {e}")
+            return []
+
+    def get_players_by_nation(self, nation_name: str) -> List[Dict]:
+        """
+        국가별 플레이어 조회
+
+        Args:
+            nation_name: 국가 이름
+
+        Returns:
+            플레이어 리스트
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT * FROM all_players
+                WHERE nation = ? COLLATE NOCASE
+                ORDER BY name
+            ''', (nation_name,))
+
+            rows = cursor.fetchall()
+            conn.close()
+
+            return [dict(row) for row in rows]
+
+        except Exception as e:
+            print(f"❌ 국가별 플레이어 조회 실패: {e}")
+            return []
+
+    def get_players_by_town(self, town_name: str) -> List[Dict]:
+        """
+        마을별 플레이어 조회
+
+        Args:
+            town_name: 마을 이름
+
+        Returns:
+            플레이어 리스트
+        """
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT * FROM all_players
+                WHERE town = ? COLLATE NOCASE
+                ORDER BY name
+            ''', (town_name,))
+
+            rows = cursor.fetchall()
+            conn.close()
+
+            return [dict(row) for row in rows]
+
+        except Exception as e:
+            print(f"❌ 마을별 플레이어 조회 실패: {e}")
+            return []
+
+    def get_total_players(self) -> int:
+        """전체 플레이어 수 조회 (all_players 테이블)"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute('SELECT COUNT(*) as count FROM all_players')
+            result = cursor.fetchone()
+
+            conn.close()
+
+            return result['count'] if result else 0
+
+        except Exception as e:
+            print(f"❌ 플레이어 수 조회 실패: {e}")
+            return 0
 
 
 # 전역 데이터베이스 관리자 인스턴스

@@ -55,10 +55,14 @@ class CallsignManager:
         if self.db_manager:
             for user_id_str, data in self.callsigns.items():
                 try:
+                    # 숫자가 아닌 키(메타데이터)는 건너뛰기
                     user_id = int(user_id_str)
                     callsign = data.get('callsign', '')
                     admin_override = data.get('admin_override', False)
                     self.db_manager.set_callsign(user_id, callsign, admin_override)
+                except ValueError:
+                    # 숫자가 아닌 키는 조용히 건너뛰기 (메타데이터)
+                    continue
                 except Exception as e:
                     print(f"⚠️ DB 콜사인 저장 실패 ({user_id_str}): {e}")
     
@@ -97,15 +101,28 @@ class CallsignManager:
         return {}
     
     def save_cooldowns(self):
-        """쿨타임 데이터 저장"""
+        """쿨타임 데이터 저장 (JSON + DB)"""
         cooldown_file = "callsign_cooldowns.json"
         # datetime 객체를 ISO 형식 문자열로 변환
         data = {}
         for user_id, timestamp in self.cooldowns.items():
             data[user_id] = timestamp.isoformat()
-        
+
+        # JSON 파일에 저장
         with open(cooldown_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+
+        # DB에도 저장 (활성화된 경우)
+        if self.db_manager:
+            for user_id_str, timestamp in self.cooldowns.items():
+                try:
+                    user_id = int(user_id_str)
+                    self.db_manager.set_cooldown(user_id, timestamp)
+                except ValueError:
+                    # 숫자가 아닌 키는 건너뛰기
+                    continue
+                except Exception as e:
+                    print(f"⚠️ DB 쿨타임 저장 실패 ({user_id_str}): {e}")
     
     def ban_user(self, user_id: int, banned_by: int, reason: str = "관리자 결정") -> Tuple[bool, str]:
         """
@@ -218,7 +235,10 @@ class CallsignManager:
 
         # 쿨타임 설정 (15일) - force나 admin_override가 아닐 때만
         if not force and not admin_override:
-            self.cooldowns[user_id_str] = datetime.now() + timedelta(days=15)
+            cooldown_end = datetime.now() + timedelta(days=15)
+            self.cooldowns[user_id_str] = cooldown_end
+
+            # JSON 파일과 DB에 쿨타임 저장
             self.save_cooldowns()
 
         # JSON 파일에 저장
@@ -292,6 +312,14 @@ class CallsignManager:
             # 쿨타임도 제거
             if user_id_str in self.cooldowns:
                 del self.cooldowns[user_id_str]
+
+                # DB에서도 쿨타임 제거 (활성화된 경우)
+                if self.db_manager:
+                    try:
+                        self.db_manager.delete_cooldown(user_id)
+                    except Exception as e:
+                        print(f"⚠️ DB 쿨타임 삭제 실패 ({user_id}): {e}")
+
                 self.save_cooldowns()
             self.save_callsigns()
             return True
@@ -319,6 +347,14 @@ class CallsignManager:
         if now >= cooldown_end:
             # 쿨타임이 끝났으면 제거
             del self.cooldowns[user_id_str]
+
+            # DB에서도 쿨타임 제거 (활성화된 경우)
+            if self.db_manager:
+                try:
+                    self.db_manager.delete_cooldown(user_id)
+                except Exception as e:
+                    print(f"⚠️ DB 쿨타임 삭제 실패 ({user_id}): {e}")
+
             self.save_cooldowns()
             return True, 0
 
@@ -343,6 +379,14 @@ class CallsignManager:
 
         if user_id_str in self.cooldowns:
             del self.cooldowns[user_id_str]
+
+            # DB에서도 쿨타임 제거 (활성화된 경우)
+            if self.db_manager:
+                try:
+                    self.db_manager.delete_cooldown(user_id)
+                except Exception as e:
+                    print(f"⚠️ DB 쿨타임 삭제 실패 ({user_id}): {e}")
+
             self.save_cooldowns()
             return True, "쿨타임이 초기화되었습니다."
         else:
@@ -357,6 +401,14 @@ class CallsignManager:
         """
         count = len(self.cooldowns)
         self.cooldowns.clear()
+
+        # DB에서도 모든 쿨타임 제거 (활성화된 경우)
+        if self.db_manager:
+            try:
+                self.db_manager.delete_all_cooldowns()
+            except Exception as e:
+                print(f"⚠️ DB 모든 쿨타임 삭제 실패: {e}")
+
         self.save_cooldowns()
         return count
 
@@ -460,7 +512,15 @@ class CallsignManager:
         }
 
         def evaluate_expression(expr: str) -> str:
-            """표현식을 평가하여 값 반환 (복합 표현식 지원)"""
+            """표현식을 평가하여 값 반환 (복합 표현식 지원)
+
+            지원 문법:
+            - {VAR} - 단순 변수
+            - "text" 또는 'text' - 리터럴 문자열
+            - {CC}{NN} - 복합 표현식 (모두 있어야 성공)
+            - {CC}&{NN} - 명시적 AND 연산자 (모두 있어야 성공)
+            - {CC}&" / "&{NN} - 변수와 리터럴 조합
+            """
             expr = expr.strip()
 
             # 단순 문자열 리터럴
@@ -468,28 +528,31 @@ class CallsignManager:
                (expr.startswith("'") and expr.endswith("'")):
                 return expr[1:-1]
 
-            # 단순 변수
-            if expr.startswith('{') and expr.endswith('}'):
-                var_name = expr[1:-1]
+            # 복합 표현식 체크: 여러 개의 변수/리터럴이 있는지 확인
+            import re
+            pattern = r'\{([A-Z]+)\}|"([^"]*)"|\'([^\']*)\''
+            matches = list(re.finditer(pattern, expr))
+
+            # 단순 변수 (매치가 1개이고 전체 표현식과 일치)
+            if len(matches) == 1 and matches[0].group() == expr:
+                var_name = matches[0].group(1)
                 value = variables.get(var_name)
                 return value if value else None
 
-            # 복합 표현식: {CC}" /" 같은 형태
+            # 복합 표현식: {CC}&{NN}, {CC}{NN}, {CC}" / " 같은 형태
             # 변수와 리터럴을 찾아서 조합
-            import re
             parts = []
             last_pos = 0
             failed = False
 
-            # 변수 {VAR} 또는 리터럴 "text"/'text' 찾기
-            pattern = r'\{([A-Z]+)\}|"([^"]*)"|\'([^\']*)\''
-
-            for match in re.finditer(pattern, expr):
-                # 매치 사이의 공백이나 텍스트도 포함
+            for match in matches:
+                # 매치 사이의 공백이나 텍스트도 포함 (& 제외)
                 if match.start() > last_pos:
                     between_text = expr[last_pos:match.start()]
-                    if between_text.strip():  # 공백만 있으면 무시
-                        # 매치되지 않은 텍스트가 있으면 복합 표현식으로 처리 불가
+                    # & 기호와 공백은 무시
+                    cleaned = between_text.replace('&', '').strip()
+                    if cleaned:
+                        # & 외의 다른 텍스트가 있으면 처리 불가
                         pass
 
                 last_pos = match.end()

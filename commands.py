@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from typing import Literal, List, Optional
+from typing import Literal, List, Optional, Union
 import aiohttp
 import os
 import json
@@ -329,13 +329,9 @@ class ServerQueueChecker:
         if mc_total == -1 or dynmap_ingame == -1:
             return (-1, -1, -1, -1)
 
-        # 350명 이하일 경우 대기열 없음으로 처리
-        if dynmap_ingame <= 350:
-            queue_count = 0
-            print(f"ℹ️ 게임 내 인원 {dynmap_ingame}명 (350명 이하) - 대기열 없음")
-        else:
-            queue_count = max(0, mc_total - dynmap_ingame)
-            print(f"ℹ️ 대기열 계산: {mc_total} - {dynmap_ingame} = {queue_count}명")
+        # 대기열 계산 (인원 제한 없이 항상 계산)
+        queue_count = max(0, mc_total - dynmap_ingame)
+        print(f"ℹ️ 대기열 계산: {mc_total} - {dynmap_ingame} = {queue_count}명")
 
         return (mc_total, dynmap_ingame, dynmap_ingame, queue_count)
 
@@ -1795,44 +1791,87 @@ class SlashCommands(commands.Cog):
                 mc_id = None
 
                 try:
-                    # API를 통해 마인크래프트 ID 조회
-                    import aiohttp
-                    import time
+                    # DB에서 마인크래프트 ID, 국가, 마을 정보 조회
+                    nation_name = ""
+                    town_name = ""
 
-                    async with aiohttp.ClientSession() as session:
-                        # 1단계: 디스코드 ID → 마크 ID
-                        url1 = f"{MC_API_BASE}/discord?discord={유저.id}"
-                        async with session.get(url1, timeout=aiohttp.ClientTimeout(total=10)) as r1:
-                            if r1.status == 200:
-                                data1 = await r1.json()
-                                if data1.get('data') and data1['data']:
-                                    mc_id = data1['data'][0].get('name')
+                    # DB에서 사용자 정보 가져오기
+                    if db_manager:
+                        user_info = db_manager.get_user_info(유저.id)
+                        if user_info:
+                            mc_id = user_info.get('current_minecraft_name', '') or user_info.get('minecraft_name', '')
 
-                    # 현재 닉네임에서 {CC} 부분만 교체
-                    current_nick = 유저.display_name
+                        # 국가/마을 정보는 nation_history에서 조회
+                        nation_info = db_manager.get_current_nation(유저.id)
+                        if nation_info:
+                            nation_name = nation_info.get('nation_name', '')
+                            town_name = nation_info.get('town_name', '')
 
-                    # {CC} 패턴 찾아서 교체
+                    # DB에서 가져오지 못한 경우 API로 조회
+                    if not mc_id:
+                        import aiohttp
+                        async with aiohttp.ClientSession() as session:
+                            url1 = f"{MC_API_BASE}/discord?discord={유저.id}"
+                            async with session.get(url1, timeout=aiohttp.ClientTimeout(total=10)) as r1:
+                                if r1.status == 200:
+                                    data1 = await r1.json()
+                                    if data1.get('data') and data1['data']:
+                                        mc_id = data1['data'][0].get('name')
+
+                    # 상위 역할 중 콜사인 양식이 있는 역할 찾기
                     import re
                     cc_pattern = r'\{CC\}'
+                    role_format = None
+                    selected_role = None
 
-                    if re.search(cc_pattern, current_nick):
-                        # {CC}를 새 콜사인으로 교체
-                        new_nick = re.sub(cc_pattern, 텍스트, current_nick)
+                    # 사용자의 역할을 우선순위 순으로 정렬 (위치가 높을수록 우선)
+                    sorted_roles = sorted(유저.roles, key=lambda r: r.position, reverse=True)
+
+                    # 역할 양식 조회
+                    all_role_formats = callsign_manager.get_all_role_formats()
+
+                    # 가장 높은 우선순위의 역할 양식 찾기
+                    for role in sorted_roles:
+                        if str(role.id) in all_role_formats:
+                            format_data = all_role_formats[str(role.id)]
+                            format_string = format_data.get("format", "")
+                            if re.search(cc_pattern, format_string):
+                                role_format = format_string
+                                selected_role = role
+                                break
+
+                    # 닉네임 생성
+                    if role_format:
+                        # callsign_manager의 apply_format_to_nickname 사용
+                        new_nick = callsign_manager.apply_format_to_nickname(
+                            format_string=role_format,
+                            mc_id=mc_id,
+                            nation=nation_name,
+                            town=town_name,
+                            callsign=텍스트
+                        )
                     else:
-                        # {CC}가 없으면 역할 양식 무시하고 {MC} | {CC} 형식으로 강제 설정
-                        if mc_id:
-                            base_name = mc_id
-                        else:
-                            # 마크 ID를 가져올 수 없으면 현재 닉네임에서 추출
-                            if 'ㅣ' in current_nick:
-                                base_name = current_nick.split('ㅣ')[0].strip()
-                            elif '|' in current_nick:
-                                base_name = current_nick.split('|')[0].strip()
-                            else:
-                                base_name = current_nick
+                        # 역할 양식이 없으면 현재 닉네임에서 {CC} 찾기
+                        current_nick = 유저.display_name
 
-                        # 새 닉네임 생성 (역할 양식 무시, | 구분자 사용)
-                        new_nick = f"{base_name} | {텍스트}"
+                        if re.search(cc_pattern, current_nick):
+                            # {CC}를 새 콜사인으로 교체
+                            new_nick = re.sub(cc_pattern, 텍스트, current_nick)
+                        else:
+                            # {CC}도 없으면 {MC} | {CC} 형식으로 강제 설정
+                            if mc_id:
+                                base_name = mc_id
+                            else:
+                                # 마크 ID를 가져올 수 없으면 현재 닉네임에서 추출
+                                if 'ㅣ' in current_nick:
+                                    base_name = current_nick.split('ㅣ')[0].strip()
+                                elif '|' in current_nick:
+                                    base_name = current_nick.split('|')[0].strip()
+                                else:
+                                    base_name = current_nick
+
+                            # 새 닉네임 생성 (| 구분자 사용)
+                            new_nick = f"{base_name} | {텍스트}"
 
                     # 닉네임 길이 제한 (32자)
                     if len(new_nick) > 32:
@@ -3324,17 +3363,11 @@ class SlashCommands(commands.Cog):
                     value=f"• 추가된 사용자: **{result.get('added_count', 0)}명**\n• 현재 대기열: **{new_queue_size}명**",
                     inline=False
                 )
-                
+
                 if new_queue_size > 0:
-                    estimated_time = new_queue_size * 36  # 대략 배치당 36초 추정
-                    minutes = estimated_time // 60
-                    seconds = estimated_time % 60
-                    
-                    if minutes > 0:
-                        time_str = f"약 {minutes}분 {seconds}초"
-                    else:
-                        time_str = f"약 {seconds}초"
-                    
+                    # Bulk 최적화를 고려한 예상 시간 계산
+                    time_str = format_estimated_time(new_queue_size)
+
                     embed.add_field(
                         name="⏰ 예상 완료 시간",
                         value=time_str,
@@ -3471,105 +3504,123 @@ class SlashCommands(commands.Cog):
 
     @app_commands.command(name="대기열추가", description="유저 또는 역할의 멤버들을 대기열에 추가합니다")
     @app_commands.describe(
-        대상="유저 또는 역할을 선택하세요 (자동 감지)"
+        선택="추가할 대상 유형",
+        유저="추가할 유저 (선택이 '유저'일 때 사용)",
+        역할="추가할 역할의 모든 멤버 (선택이 '역할'일 때 사용)"
     )
+    @app_commands.choices(선택=[
+        app_commands.Choice(name="유저", value="user"),
+        app_commands.Choice(name="역할", value="role")
+    ])
     @app_commands.check(is_admin)
     async def 대기열추가(
         self,
         interaction: discord.Interaction,
-        대상: str
+        선택: app_commands.Choice[str],
+        유저: discord.Member = None,
+        역할: discord.Role = None
     ):
-        """유저 또는 역할을 자동으로 감지하여 대기열에 추가"""
-        guild = interaction.guild
+        """유저 또는 역할의 멤버들을 대기열에 추가"""
         members = []
         target_name = None
         target_type = None
 
-        # 멘션 형식 처리 (< > 제거)
-        input_clean = 대상.replace('<@', '').replace('<@&', '').replace('>', '').replace('!', '')
-
-        try:
-            input_id = int(input_clean)
-        except ValueError:
-            await interaction.response.send_message(
-                "❌ 올바른 형식을 입력해주세요.\n"
-                "**사용법**: `/대기열추가 대상:@유저` 또는 `/대기열추가 대상:@역할`",
-                ephemeral=True
-            )
-            return
-
-        # 유저인지 확인
-        member = guild.get_member(input_id)
-        if member:
-            members.append(member)
-            target_name = member.display_name
-            target_type = "유저"
-        else:
-            # 역할인지 확인
-            role = guild.get_role(input_id)
-            if role:
-                members.extend(role.members)
-                target_name = role.name
-                target_type = "역할"
-            else:
+        # 선택에 따라 처리
+        if 선택.value == "user":
+            if not 유저:
                 await interaction.response.send_message(
-                    "❌ 유저 또는 역할을 찾을 수 없습니다.\n"
-                    "올바른 멘션을 사용했는지 확인해주세요.",
+                    "❌ **유저**를 선택했지만 유저를 멘션하지 않았습니다.\n"
+                    "**사용법**: `/대기열추가 선택:유저 유저:@유저멘션`",
                     ephemeral=True
                 )
                 return
+
+            members.append(유저)
+            target_name = 유저.display_name
+            target_type = "유저"
+            print(f"✅ 유저 감지: {유저.display_name} ({유저.id})")
+
+        elif 선택.value == "role":
+            if not 역할:
+                await interaction.response.send_message(
+                    "❌ **역할**을 선택했지만 역할을 멘션하지 않았습니다.\n"
+                    "**사용법**: `/대기열추가 선택:역할 역할:@역할멘션`",
+                    ephemeral=True
+                )
+                return
+
+            members.extend(역할.members)
+            target_name = 역할.name
+            target_type = "역할"
+            print(f"✅ 역할 감지: {역할.name} ({len(members)}명)")
+
+            if not members:
+                await interaction.response.send_message(
+                    f"❌ **{역할.name}** 역할에 멤버가 없습니다.",
+                    ephemeral=True
+                )
+                return
+
+        print(f"📋 처리할 멤버 수: {len(members)}")
 
         # 대기열로 처리
         await self._handle_queue_processing(interaction, members, target_type, target_name)
 
     async def _handle_queue_processing(self, interaction: discord.Interaction, members: list, target_type: str, target_name: str):
-        """대기열을 통한 처리"""
+        """대기열 추가 방식"""
         await interaction.response.defer(thinking=True)
-        
+
         added_count = 0
         already_in_queue = 0
-        
+
         # 대기열에 사용자 추가
         for member in members:
             try:
-                queue_manager.add_user(member.id)
-                added_count += 1
-            except:
+                if queue_manager.add_user(member.id):
+                    added_count += 1
+                    print(f"✅ 대기열 추가: {member.display_name} ({member.id})")
+                else:
+                    already_in_queue += 1
+                    print(f"ℹ️ 이미 대기 중: {member.display_name} ({member.id})")
+            except Exception as e:
+                print(f"❌ 대기열 추가 실패 ({member.display_name}): {e}")
                 already_in_queue += 1
-        
+
         # 결과 메시지 생성
         embed = discord.Embed(
             title="🔄 대기열 추가 완료",
             color=0x00ff00
         )
-        
+
         if target_type == "유저":
             embed.description = f"**{target_name}** 사용자 처리"
         else:
             embed.description = f"**{target_name}** 역할 멤버 {len(members)}명 처리"
-        
+
         embed.add_field(
             name="📋 처리 현황",
             value=f"• 새로 추가: **{added_count}명**\n• 이미 대기 중: **{already_in_queue}명**",
             inline=False
         )
-        
+
         current_queue_size = queue_manager.get_queue_size()
         processing_status = "처리 중" if queue_manager.is_processing() else "대기 중"
-        
+
         embed.add_field(
             name="🎯 대기열 상태",
             value=f"• 총 대기 인원: **{current_queue_size}명**\n• 현재 상태: **{processing_status}**",
             inline=False
         )
-        
+
         if added_count > 0:
+            # 예상 시간 계산
+            time_str = format_estimated_time(current_queue_size)
             embed.add_field(
                 name="⏰ 예상 처리 시간",
-                value="1분마다 자동으로 처리되며, 완료 시 결과가 해당 채널에 전송됩니다.",
+                value=f"{time_str}\n대기열이 10명 이상이면 자동으로 처리가 시작됩니다.",
                 inline=False
             )
-        
+
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def _handle_immediate_processing(self, interaction: discord.Interaction, members: list, target_type: str, target_name: str):
@@ -4624,6 +4675,38 @@ class SlashCommands(commands.Cog):
                 inline=False
             )
 
+            # 콜사인 정보 추가
+            if CALLSIGN_ENABLED and callsign_manager:
+                callsign_info = callsign_manager.get_callsign_info(유저.id)
+                ban_info = callsign_manager.get_ban_info(유저.id)
+                can_use, remaining_days = callsign_manager.check_cooldown(유저.id)
+
+                callsign_text = ""
+
+                if callsign_info:
+                    callsign = callsign_info.get('callsign', 'N/A')
+                    set_at = callsign_info.get('set_at', 'N/A')
+                    if isinstance(set_at, str) and len(set_at) > 19:
+                        set_at = set_at[:19]
+                    callsign_text += f"**현재 콜사인:** `{callsign}`\n"
+                    callsign_text += f"**설정 일시:** {set_at}\n"
+                else:
+                    callsign_text += f"**현재 콜사인:** 없음\n"
+
+                if ban_info:
+                    callsign_text += f"**상태:** ⛔ 콜사인 사용 금지\n"
+                    callsign_text += f"**금지 사유:** {ban_info.get('reason', 'N/A')}\n"
+                elif not can_use:
+                    callsign_text += f"**쿨타임:** ⏳ {remaining_days}일 남음\n"
+                else:
+                    callsign_text += f"**상태:** ✅ 콜사인 변경 가능\n"
+
+                embed.add_field(
+                    name="📛 콜사인 정보",
+                    value=callsign_text.strip(),
+                    inline=False
+                )
+
             if name_history:
                 history_text = "\n".join([
                     f"{i+1}. `{h['minecraft_name']}` - {h['changed_at'][:19]}"
@@ -4678,6 +4761,39 @@ class SlashCommands(commands.Cog):
                           f"**최근 업데이트:** {user['last_updated'][:19] if user.get('last_updated') else 'N/A'}",
                     inline=False
                 )
+
+                # 콜사인 정보 추가
+                if CALLSIGN_ENABLED and callsign_manager:
+                    discord_id_int = int(user['discord_id'])
+                    callsign_info = callsign_manager.get_callsign_info(discord_id_int)
+                    ban_info = callsign_manager.get_ban_info(discord_id_int)
+                    can_use, remaining_days = callsign_manager.check_cooldown(discord_id_int)
+
+                    callsign_text = ""
+
+                    if callsign_info:
+                        callsign = callsign_info.get('callsign', 'N/A')
+                        set_at = callsign_info.get('set_at', 'N/A')
+                        if isinstance(set_at, str) and len(set_at) > 19:
+                            set_at = set_at[:19]
+                        callsign_text += f"**현재 콜사인:** `{callsign}`\n"
+                        callsign_text += f"**설정 일시:** {set_at}\n"
+                    else:
+                        callsign_text += f"**현재 콜사인:** 없음\n"
+
+                    if ban_info:
+                        callsign_text += f"**상태:** ⛔ 콜사인 사용 금지\n"
+                        callsign_text += f"**금지 사유:** {ban_info.get('reason', 'N/A')}\n"
+                    elif not can_use:
+                        callsign_text += f"**쿨타임:** ⏳ {remaining_days}일 남음\n"
+                    else:
+                        callsign_text += f"**상태:** ✅ 콜사인 변경 가능\n"
+
+                    embed.add_field(
+                        name="📛 콜사인 정보",
+                        value=callsign_text.strip(),
+                        inline=False
+                    )
 
                 if name_history:
                     history_text = "\n".join([
@@ -4886,7 +5002,7 @@ class SlashCommands(commands.Cog):
             )
 
             embed.add_field(
-                name="⏳ 대기열",
+                name="⏳ 예상대기열",
                 value=f"**{queue}명**",
                 inline=True
             )
@@ -4909,7 +5025,7 @@ class SlashCommands(commands.Cog):
 
                     embed.add_field(
                         name="📈 비율",
-                        value=f"{progress_bar}\n게임 내: {ingame_percent}% | 대기: {queue_percent}%",
+                        value=f"{progress_bar}\n게임 내: {ingame_percent}% | 예상대기: {queue_percent}%",
                         inline=False
                     )
 

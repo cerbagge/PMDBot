@@ -32,19 +32,38 @@ def format_duration(seconds: int) -> str:
     
     return " ".join(parts)
 
-def format_estimated_time(queue_size: int, seconds_per_item: int = 20) -> str:
+def format_estimated_time(queue_size: int, seconds_per_item: int = 20, use_bulk_optimization: bool = True) -> str:
     """
     대기열 크기와 아이템당 처리 시간을 바탕으로 예상 완료 시간을 계산
 
     Args:
         queue_size (int): 대기열 크기
-        seconds_per_item (int): 아이템당 예상 처리 시간 (기본값: 20초)
+        seconds_per_item (int): 아이템당 예상 처리 시간 (기본값: 20초, Bulk 미사용 시)
+        use_bulk_optimization (bool): Bulk 최적화 여부 (기본값: True)
 
     Returns:
         str: 포맷된 예상 시간 문자열
     """
     if queue_size <= 0:
         return "대기열이 비어있습니다"
+
+    # Bulk 최적화 활성화 시 예상 시간 단축
+    if use_bulk_optimization:
+        try:
+            from bulk_updater import bulk_data_manager
+
+            # Bulk 데이터가 사용 가능한지 확인
+            if bulk_data_manager.is_data_available():
+                # Bulk 데이터 사용 시: 대부분 DB 유저 = 5초/명, 신규 유저 = 15초/명
+                # 평균적으로 80% DB 유저, 20% 신규 유저로 가정
+                # 평균 시간 = 0.8 * 5초 + 0.2 * 15초 = 4초 + 3초 = 7초
+                seconds_per_item = 7
+            else:
+                # Bulk 데이터 없으면 기존 방식 사용
+                seconds_per_item = 20
+        except:
+            # bulk_updater를 불러올 수 없으면 기존 방식 사용
+            seconds_per_item = 20
 
     total_seconds = queue_size * seconds_per_item
     return f"약 {format_duration(total_seconds)}"

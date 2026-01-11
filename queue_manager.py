@@ -17,6 +17,13 @@ class QueueManager:
             self.queue.append(user_id)
             return True
         return False
+
+    def add_user_priority(self, user_id: int):
+        """사용자를 대기열 맨 앞에 우선 추가 (중복 방지)"""
+        if not self.is_user_in_queue(user_id):
+            self.queue.insert(0, user_id)
+            return True
+        return False
     
     def get_next(self):
         """대기열에서 다음 사용자 가져오기"""
