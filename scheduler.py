@@ -547,26 +547,31 @@ def setup_scheduler(bot):
 def get_scheduler_info():
     """백그라운드 태스크 상태 정보를 반환 (discord.ext.tasks 기반)"""
     try:
-        # 백그라운드 루프 실행 상태
-        queue_running = queue_processor_loop.is_running()
+        # 백그라운드 루프 실행 상태 - 3개의 병렬 대기열
+        queue_loops = [queue_processor_loop_1, queue_processor_loop_2, queue_processor_loop_3]
+        queue_running = [loop.is_running() for loop in queue_loops]
+        any_queue_running = any(queue_running)
         auto_roles_running = auto_roles_checker.is_running()
 
         # 등록된 작업들
         jobs = []
 
-        if queue_running:
-            # 다음 실행까지 남은 시간 계산
-            if queue_processor_loop.next_iteration:
-                next_run = queue_processor_loop.next_iteration.strftime("%Y-%m-%d %H:%M:%S")
-            else:
-                next_run = "곧 실행"
+        # 3개의 병렬 대기열 처리 루프 정보
+        for i, (loop, running) in enumerate(zip(queue_loops, queue_running), 1):
+            if running:
+                if loop.next_iteration:
+                    next_run = loop.next_iteration.strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    next_run = "곧 실행"
 
-            jobs.append({
-                "id": "queue_processor",
-                "name": "대기열 처리",
-                "next_run": next_run,
-                "interval": "1분마다"
-            })
+                queue_size = queue_manager.get_queue_size(i-1)
+                jobs.append({
+                    "id": f"queue_processor_{i}",
+                    "name": f"대기열 {i} 처리",
+                    "next_run": next_run,
+                    "interval": "1분마다",
+                    "queue_size": queue_size
+                })
 
         if auto_roles_running:
             day_names = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"]
@@ -579,10 +584,14 @@ def get_scheduler_info():
                 "interval": "1시간마다 체크"
             })
 
+        # 대기열 상태 정보
+        queue_status = queue_manager.get_status()
+
         # 상태 정보
         status_info = {
-            "running": queue_running or auto_roles_running,
-            "queue_loop_running": queue_running,
+            "running": any_queue_running or auto_roles_running,
+            "queue_loop_running": any_queue_running,
+            "queue_loops_status": queue_running,  # [True, True, True] 형태
             "auto_roles_loop_running": auto_roles_running,
             "jobs": jobs,
             "auto_execution_day": AUTO_EXECUTION_DAY,
@@ -590,7 +599,8 @@ def get_scheduler_info():
             "auto_execution_minute": AUTO_EXECUTION_MINUTE,
             "rate_limit_detected": rate_limit_detected,
             "rate_limit_until": rate_limit_until.strftime("%Y-%m-%d %H:%M:%S") if rate_limit_until else None,
-            "retry_queue_size": len(retry_counts)
+            "retry_queue_size": len(retry_counts),
+            "queue_status": queue_status  # 대기열 상세 상태 정보
         }
 
         return status_info
@@ -599,6 +609,7 @@ def get_scheduler_info():
         return {
             "running": False,
             "queue_loop_running": False,
+            "queue_loops_status": [False, False, False],
             "auto_roles_loop_running": False,
             "jobs": [],
             "auto_execution_day": AUTO_EXECUTION_DAY,
@@ -606,7 +617,8 @@ def get_scheduler_info():
             "auto_execution_minute": AUTO_EXECUTION_MINUTE,
             "rate_limit_detected": False,
             "rate_limit_until": None,
-            "retry_queue_size": 0
+            "retry_queue_size": 0,
+            "queue_status": {"total_size": 0, "queue_sizes": [0, 0, 0], "processing": [False, False, False], "any_processing": False}
         }
     
 
@@ -1009,29 +1021,69 @@ async def manual_execute_auto_roles(bot):
             "message": f"실행 중 오류 발생: {str(e)}"
         }
 
-# Discord.py tasks를 사용한 백그라운드 루프
+# Discord.py tasks를 사용한 백그라운드 루프 - 3개의 병렬 대기열
+# 대기열 처리 루프 1
 @tasks.loop(minutes=1)
-async def queue_processor_loop():
-    """대기열 처리 루프 - 1분마다 실행 (완전히 비동기, 블로킹 없음)"""
+async def queue_processor_loop_1():
+    """대기열 1 처리 루프 - 1분마다 실행"""
     global _bot_instance
-
     if _bot_instance is None:
-        print("⚠️ 봇 인스턴스가 없어 대기열 처리를 건너뜁니다")
         return
-
     try:
-        await process_queue_batch(_bot_instance)
+        await process_queue_batch(_bot_instance, queue_index=0)
     except Exception as e:
-        print(f"❌ 대기열 처리 루프 오류: {e}")
+        print(f"❌ 대기열 1 처리 루프 오류: {e}")
         import traceback
         traceback.print_exc()
 
-@queue_processor_loop.before_loop
-async def before_queue_processor():
-    """대기열 처리 시작 전 봇 준비 대기"""
+@queue_processor_loop_1.before_loop
+async def before_queue_processor_1():
     if _bot_instance:
         await _bot_instance.wait_until_ready()
-        print("✅ 대기열 처리 루프 준비 완료")
+        print("✅ 대기열 1 처리 루프 준비 완료")
+
+# 대기열 처리 루프 2
+@tasks.loop(minutes=1)
+async def queue_processor_loop_2():
+    """대기열 2 처리 루프 - 1분마다 실행"""
+    global _bot_instance
+    if _bot_instance is None:
+        return
+    try:
+        await process_queue_batch(_bot_instance, queue_index=1)
+    except Exception as e:
+        print(f"❌ 대기열 2 처리 루프 오류: {e}")
+        import traceback
+        traceback.print_exc()
+
+@queue_processor_loop_2.before_loop
+async def before_queue_processor_2():
+    if _bot_instance:
+        await _bot_instance.wait_until_ready()
+        print("✅ 대기열 2 처리 루프 준비 완료")
+
+# 대기열 처리 루프 3
+@tasks.loop(minutes=1)
+async def queue_processor_loop_3():
+    """대기열 3 처리 루프 - 1분마다 실행"""
+    global _bot_instance
+    if _bot_instance is None:
+        return
+    try:
+        await process_queue_batch(_bot_instance, queue_index=2)
+    except Exception as e:
+        print(f"❌ 대기열 3 처리 루프 오류: {e}")
+        import traceback
+        traceback.print_exc()
+
+@queue_processor_loop_3.before_loop
+async def before_queue_processor_3():
+    if _bot_instance:
+        await _bot_instance.wait_until_ready()
+        print("✅ 대기열 3 처리 루프 준비 완료")
+
+# 하위 호환성을 위한 별칭 (기존 코드에서 참조할 경우)
+queue_processor_loop = queue_processor_loop_1
 
 @tasks.loop(hours=1)
 async def auto_roles_checker():
@@ -1067,14 +1119,14 @@ async def before_auto_roles_checker():
         await _bot_instance.wait_until_ready()
         print("✅ 자동 역할 체크 루프 준비 완료")
 
-@tasks.loop(minutes=3)
+@tasks.loop(minutes=5)
 async def bulk_data_updater():
-    """Bulk 데이터 업데이트 루프 - 3분마다 실행"""
+    """Bulk 데이터 업데이트 루프 - 5분마다 실행"""
     if not BULK_ENABLED or not bulk_data_manager:
         return
 
     try:
-        print("🔄 Bulk 데이터 업데이트 시작 (3분 주기)")
+        print("🔄 Bulk 데이터 업데이트 시작 (5분 주기)")
         # 비동기적으로 bulk 데이터 가져오기
         await asyncio.to_thread(bulk_data_manager.fetch_bulk_data, save_to_db=True)
 
@@ -1107,10 +1159,17 @@ def start_scheduler(bot):
         # 봇 인스턴스 저장
         _bot_instance = bot
 
-        # 대기열 처리 루프 시작
-        if not queue_processor_loop.is_running():
-            queue_processor_loop.start()
-            print("   ✅ 대기열 처리 루프 시작 (1분마다)")
+        # 3개의 병렬 대기열 처리 루프 시작
+        print("   🔄 3개의 병렬 대기열 처리 루프 시작...")
+        if not queue_processor_loop_1.is_running():
+            queue_processor_loop_1.start()
+            print("   ✅ 대기열 1 처리 루프 시작 (1분마다)")
+        if not queue_processor_loop_2.is_running():
+            queue_processor_loop_2.start()
+            print("   ✅ 대기열 2 처리 루프 시작 (1분마다)")
+        if not queue_processor_loop_3.is_running():
+            queue_processor_loop_3.start()
+            print("   ✅ 대기열 3 처리 루프 시작 (1분마다)")
 
         # 자동 역할 체크 루프 시작
         if not auto_roles_checker.is_running():
@@ -1125,9 +1184,9 @@ def start_scheduler(bot):
         # Bulk 데이터 업데이트 루프 시작
         if BULK_ENABLED and not bulk_data_updater.is_running():
             bulk_data_updater.start()
-            print(f"   ✅ Bulk 데이터 업데이트 루프 시작 (3분마다)")
+            print(f"   ✅ Bulk 데이터 업데이트 루프 시작 (5분마다)")
 
-        print("✅ 백그라운드 태스크 시작 완료 (명령어와 완전히 분리됨)")
+        print("✅ 백그라운드 태스크 시작 완료 (3개 병렬 대기열 활성화)")
 
     except Exception as e:
         print(f"❌ 백그라운드 태스크 시작 실패: {e}")
@@ -1152,9 +1211,16 @@ def stop_scheduler():
     try:
         print("🛑 백그라운드 태스크 중지")
 
-        if queue_processor_loop.is_running():
-            queue_processor_loop.cancel()
-            print("   ✅ 대기열 처리 루프 중지")
+        # 3개의 병렬 대기열 처리 루프 중지
+        if queue_processor_loop_1.is_running():
+            queue_processor_loop_1.cancel()
+            print("   ✅ 대기열 1 처리 루프 중지")
+        if queue_processor_loop_2.is_running():
+            queue_processor_loop_2.cancel()
+            print("   ✅ 대기열 2 처리 루프 중지")
+        if queue_processor_loop_3.is_running():
+            queue_processor_loop_3.cancel()
+            print("   ✅ 대기열 3 처리 루프 중지")
 
         if auto_roles_checker.is_running():
             auto_roles_checker.cancel()
@@ -1172,39 +1238,43 @@ def stop_scheduler():
     except Exception as e:
         print(f"❌ 백그라운드 태스크 중지 실패: {e}")
 
-async def process_queue_batch(bot):
-    """대기열에서 사용자들을 배치로 처리 - 429 오류 처리 추가"""
+async def process_queue_batch(bot, queue_index: int = 0):
+    """특정 대기열에서 사용자들을 배치로 처리 - 429 오류 처리 추가"""
     try:
         # 속도 제한 상태 확인
         if is_rate_limited():
             remaining_time = (rate_limit_until - datetime.now()).total_seconds()
-            print(f"⏸️ API 속도 제한 중 - 남은 시간: {remaining_time:.0f}초")
+            print(f"⏸️ [Q{queue_index+1}] API 속도 제한 중 - 남은 시간: {remaining_time:.0f}초")
             return
 
-        # 처리 전 대기열 크기 확인
-        queue_size_before = queue_manager.get_queue_size()
+        # 해당 대기열이 이미 처리 중인지 확인
+        if queue_manager.is_processing(queue_index):
+            return
+
+        # 처리 전 해당 대기열 크기 확인
+        queue_size_before = queue_manager.get_queue_size(queue_index)
 
         if queue_size_before == 0:
             return
 
-        print("🔄 대기열 배치 처리 시작")
-        queue_manager.processing = True
+        print(f"🔄 [Q{queue_index+1}] 대기열 배치 처리 시작 (대기: {queue_size_before}명)")
+        queue_manager.set_processing(queue_index, True)
 
         # 배치 크기 (한 번에 처리할 사용자 수)
         batch_size = 10
         processed_users = []
 
         for _ in range(batch_size):
-            user_id = queue_manager.get_next()
+            user_id = queue_manager.get_next(queue_index)
             if user_id is None:
                 break
             processed_users.append(user_id)
 
         if not processed_users:
-            queue_manager.processing = False
+            queue_manager.set_processing(queue_index, False)
             return
 
-        print(f"📋 배치 처리 대상: {len(processed_users)}명")
+        print(f"📋 [Q{queue_index+1}] 배치 처리 대상: {len(processed_users)}명")
 
         # DB 연동 여부로 유저 분리
         db_users = []  # DB에 UUID가 있는 유저 (Discord ID API 스킵)
@@ -1220,7 +1290,7 @@ async def process_queue_batch(bot):
             except:
                 new_users.append(user_id)  # 확인 실패하면 신규로 간주
 
-        print(f"  📊 분류: DB UUID 보유 {len(db_users)}명, UUID 없음 {len(new_users)}명")
+        print(f"  📊 [Q{queue_index+1}] 분류: DB UUID 보유 {len(db_users)}명, UUID 없음 {len(new_users)}명")
 
         # API 세션 생성
         async with aiohttp.ClientSession() as session:
@@ -1228,36 +1298,36 @@ async def process_queue_batch(bot):
             for idx, user_id in enumerate(db_users, 1):
                 try:
                     if is_rate_limited():
-                        print(f"⏸️ 속도 제한 감지 - 나머지 사용자 대기열에 재추가")
+                        print(f"⏸️ [Q{queue_index+1}] 속도 제한 감지 - 나머지 사용자 대기열에 재추가")
                         queue_manager.add_user(user_id)
                         # 나머지 모두 다시 추가
                         for remaining_id in db_users[idx:] + new_users:
                             queue_manager.add_user(remaining_id)
                         break
 
-                    print(f"  ⚡ [{idx}/{len(db_users)}] DB UUID 보유 유저 처리: {user_id}")
+                    print(f"  ⚡ [Q{queue_index+1}] [{idx}/{len(db_users)}] DB UUID 보유 유저 처리: {user_id}")
                     await process_single_user(bot, session, user_id)
                     await asyncio.sleep(5)  # UUID로만 게임 정보 API 호출
                 except Exception as e:
-                    print(f"❌ DB UUID 보유 유저 {user_id} 처리 실패: {e}")
+                    print(f"❌ [Q{queue_index+1}] DB UUID 보유 유저 {user_id} 처리 실패: {e}")
 
             # 2. UUID 없는 유저 처리 (Discord ID API + 게임 정보 API)
             for idx, user_id in enumerate(new_users, 1):
                 try:
                     if is_rate_limited():
-                        print(f"⏸️ 속도 제한 감지 - 나머지 신규 유저 대기열에 재추가")
+                        print(f"⏸️ [Q{queue_index+1}] 속도 제한 감지 - 나머지 신규 유저 대기열에 재추가")
                         # 나머지 신규 유저 다시 추가
                         for remaining_id in new_users[idx-1:]:
                             queue_manager.add_user(remaining_id)
                         break
 
-                    print(f"  🔍 [{idx}/{len(new_users)}] UUID 없는 유저 처리: {user_id}")
+                    print(f"  🔍 [Q{queue_index+1}] [{idx}/{len(new_users)}] UUID 없는 유저 처리: {user_id}")
                     await process_single_user(bot, session, user_id)
                     await asyncio.sleep(10)  # Discord ID API + 게임 정보 API 호출
                 except Exception as e:
-                    print(f"❌ UUID 없는 유저 {user_id} 처리 실패: {e}")
+                    print(f"❌ [Q{queue_index+1}] UUID 없는 유저 {user_id} 처리 실패: {e}")
 
-        print(f"✅ 배치 처리 완료: DB UUID 보유 {len(db_users)}명, UUID 없음 {len(new_users)}명")
+        print(f"✅ [Q{queue_index+1}] 배치 처리 완료: DB UUID 보유 {len(db_users)}명, UUID 없음 {len(new_users)}명")
 
         # 처리 후 대기열이 비었는지 확인하고 완료 메시지 전송
         queue_size_after = queue_manager.get_queue_size()
@@ -1326,9 +1396,9 @@ async def process_queue_batch(bot):
                 print(f"⚠️ 실패 채널 전송 실패: {e}")
 
     except Exception as e:
-        print(f"❌ 배치 처리 오류: {e}")
+        print(f"❌ [Q{queue_index+1}] 배치 처리 오류: {e}")
     finally:
-        queue_manager.processing = False
+        queue_manager.set_processing(queue_index, False)
 
 async def process_single_user(bot, session, user_id):
     """단일 사용자 처리 - 429 오류 처리 및 재대기열 추가, 마지막 온라인 정보 포함"""
@@ -2057,10 +2127,7 @@ async def execute_auto_roles(bot):
             # 비동기로 bulk 데이터 가져오기
             update_success = await asyncio.to_thread(bulk_data_manager.fetch_bulk_data)
 
-            if update_success:
-                stats = bulk_data_manager.get_stats()
-                print(f"✅ Bulk 데이터 업데이트 완료: {stats['total_residents']}명")
-            else:
+            if not update_success:
                 print("⚠️ Bulk 데이터 업데이트 실패 - 기존 캐시 데이터 사용")
 
                 # 캐시 데이터가 있는지 확인

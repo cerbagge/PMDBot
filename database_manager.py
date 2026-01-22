@@ -1,32 +1,27 @@
-# database_manager.py - SQLite 데이터베이스 관리
+# database_manager.py - PostgreSQL 데이터베이스 관리
 
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import os
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple
 import json
+from db_config.database import get_connection_params
 
 class DatabaseManager:
     """디스코드 ID, Minecraft UUID, 닉네임 히스토리를 관리하는 데이터베이스"""
 
-    def __init__(self, db_path: str = "data/discord_minecraft.db"):
+    def __init__(self):
         """
         데이터베이스 관리자 초기화
-
-        Args:
-            db_path: 데이터베이스 파일 경로
         """
-        # data 폴더 생성
-        os.makedirs("data", exist_ok=True)
-
-        self.db_path = db_path
+        self.conn_params = get_connection_params()
         self.init_database()
-        print(f"✅ 데이터베이스 초기화 완료: {db_path}")
+        print(f"[OK] PostgreSQL 데이터베이스 초기화 완료: {self.conn_params['host']}:{self.conn_params['port']}/{self.conn_params['dbname']}")
 
-    def get_connection(self) -> sqlite3.Connection:
+    def get_connection(self):
         """데이터베이스 연결 생성"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row  # 딕셔너리 형태로 결과 반환
+        conn = psycopg2.connect(**self.conn_params)
         return conn
 
     def init_database(self):
@@ -37,54 +32,41 @@ class DatabaseManager:
         # 사용자 기본 정보 테이블
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
-                discord_id INTEGER PRIMARY KEY,
+                discord_id BIGINT PRIMARY KEY,
                 minecraft_uuid TEXT,
                 current_minecraft_name TEXT,
-                first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                first_seen TIMESTAMP DEFAULT NOW(),
+                last_updated TIMESTAMP DEFAULT NOW()
             )
         ''')
 
         # Minecraft 닉네임 히스토리 테이블
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS minecraft_name_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                discord_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                discord_id BIGINT NOT NULL,
                 minecraft_uuid TEXT,
                 minecraft_name TEXT NOT NULL,
-                changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                changed_at TIMESTAMP DEFAULT NOW(),
                 FOREIGN KEY (discord_id) REFERENCES users(discord_id)
             )
         ''')
 
-        # 국가 히스토리 테이블 (신규)
+        # 국가 히스토리 테이블
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS nation_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                discord_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                discord_id BIGINT NOT NULL,
                 nation_name TEXT,
                 nation_uuid TEXT,
                 town_name TEXT,
                 town_uuid TEXT,
                 nation_ranks TEXT,
                 town_ranks TEXT,
-                changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                changed_at TIMESTAMP DEFAULT NOW(),
                 FOREIGN KEY (discord_id) REFERENCES users(discord_id)
             )
         ''')
-
-        # nation_ranks, town_ranks 컬럼 추가 (기존 테이블에 없는 경우)
-        try:
-            cursor.execute('ALTER TABLE nation_history ADD COLUMN nation_ranks TEXT')
-            print("✅ nation_history 테이블에 nation_ranks 컬럼 추가됨")
-        except sqlite3.OperationalError:
-            pass  # 이미 존재하는 경우 무시
-
-        try:
-            cursor.execute('ALTER TABLE nation_history ADD COLUMN town_ranks TEXT')
-            print("✅ nation_history 테이블에 town_ranks 컬럼 추가됨")
-        except sqlite3.OperationalError:
-            pass  # 이미 존재하는 경우 무시
 
         # 인덱스 생성 (조회 성능 향상)
         cursor.execute('''
@@ -113,24 +95,24 @@ class DatabaseManager:
             ON nation_history(nation_name)
         ''')
 
-        # 콜사인 테이블 (신규)
+        # 콜사인 테이블
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS callsigns (
-                discord_id INTEGER PRIMARY KEY,
+                discord_id BIGINT PRIMARY KEY,
                 callsign TEXT NOT NULL,
-                set_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                set_at TIMESTAMP DEFAULT NOW(),
                 admin_override INTEGER DEFAULT 0,
                 FOREIGN KEY (discord_id) REFERENCES users(discord_id)
             )
         ''')
 
-        # 콜사인 히스토리 테이블 (신규)
+        # 콜사인 히스토리 테이블
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS callsign_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                discord_id INTEGER NOT NULL,
+                id SERIAL PRIMARY KEY,
+                discord_id BIGINT NOT NULL,
                 callsign TEXT NOT NULL,
-                set_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                set_at TIMESTAMP DEFAULT NOW(),
                 admin_override INTEGER DEFAULT 0,
                 FOREIGN KEY (discord_id) REFERENCES users(discord_id)
             )
@@ -156,7 +138,7 @@ class DatabaseManager:
                 town TEXT,
                 nation_ranks TEXT,
                 town_ranks TEXT,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                last_updated TIMESTAMP DEFAULT NOW()
             )
         ''')
 
@@ -176,12 +158,12 @@ class DatabaseManager:
             ON all_players(town)
         ''')
 
-        # 콜사인 쿨타임 테이블 (신규)
+        # 콜사인 쿨타임 테이블
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS callsign_cooldowns (
-                discord_id INTEGER PRIMARY KEY,
+                discord_id BIGINT PRIMARY KEY,
                 cooldown_end TIMESTAMP NOT NULL,
-                set_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                set_at TIMESTAMP DEFAULT NOW(),
                 FOREIGN KEY (discord_id) REFERENCES users(discord_id)
             )
         ''')
@@ -214,10 +196,10 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # 기존 사용자 확인
-            cursor.execute('SELECT * FROM users WHERE discord_id = ?', (discord_id,))
+            cursor.execute('SELECT * FROM users WHERE discord_id = %s', (discord_id,))
             existing_user = cursor.fetchone()
 
             if existing_user:
@@ -229,45 +211,45 @@ class DatabaseManager:
                     # 사용자 정보 업데이트
                     cursor.execute('''
                         UPDATE users
-                        SET minecraft_uuid = ?, current_minecraft_name = ?, last_updated = ?
-                        WHERE discord_id = ?
+                        SET minecraft_uuid = %s, current_minecraft_name = %s, last_updated = %s
+                        WHERE discord_id = %s
                     ''', (minecraft_uuid, minecraft_name, datetime.now(), discord_id))
 
                     # 닉네임 히스토리에 추가
                     cursor.execute('''
                         INSERT INTO minecraft_name_history (discord_id, minecraft_uuid, minecraft_name)
-                        VALUES (?, ?, ?)
+                        VALUES (%s, %s, %s)
                     ''', (discord_id, minecraft_uuid, minecraft_name))
 
-                    print(f"📝 닉네임 변경 감지: {discord_id} - {old_name} → {minecraft_name}")
+                    print(f"[UPDATE] 닉네임 변경 감지: {discord_id} - {old_name} -> {minecraft_name}")
                 else:
                     # 닉네임은 같지만 UUID나 last_updated만 업데이트
                     cursor.execute('''
                         UPDATE users
-                        SET minecraft_uuid = ?, last_updated = ?
-                        WHERE discord_id = ?
+                        SET minecraft_uuid = %s, last_updated = %s
+                        WHERE discord_id = %s
                     ''', (minecraft_uuid, datetime.now(), discord_id))
             else:
                 # 새 사용자 추가
                 cursor.execute('''
                     INSERT INTO users (discord_id, minecraft_uuid, current_minecraft_name)
-                    VALUES (?, ?, ?)
+                    VALUES (%s, %s, %s)
                 ''', (discord_id, minecraft_uuid, minecraft_name))
 
                 # 첫 닉네임 히스토리 추가
                 cursor.execute('''
                     INSERT INTO minecraft_name_history (discord_id, minecraft_uuid, minecraft_name)
-                    VALUES (?, ?, ?)
+                    VALUES (%s, %s, %s)
                 ''', (discord_id, minecraft_uuid, minecraft_name))
 
-                print(f"➕ 새 사용자 추가: {discord_id} - {minecraft_name}")
+                print(f"[ADD] 새 사용자 추가: {discord_id} - {minecraft_name}")
 
             conn.commit()
             conn.close()
             return True
 
         except Exception as e:
-            print(f"❌ 사용자 정보 저장 실패: {e}")
+            print(f"[ERROR] 사용자 정보 저장 실패: {e}")
             return False
 
     def get_user_info(self, discord_id: int) -> Optional[Dict]:
@@ -282,9 +264,9 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-            cursor.execute('SELECT * FROM users WHERE discord_id = ?', (discord_id,))
+            cursor.execute('SELECT * FROM users WHERE discord_id = %s', (discord_id,))
             row = cursor.fetchone()
 
             conn.close()
@@ -294,7 +276,7 @@ class DatabaseManager:
             return None
 
         except Exception as e:
-            print(f"❌ 사용자 정보 조회 실패: {e}")
+            print(f"[ERROR] 사용자 정보 조회 실패: {e}")
             return None
 
     def get_name_history(self, discord_id: int, limit: int = 10) -> List[Dict]:
@@ -310,13 +292,13 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             cursor.execute('''
                 SELECT * FROM minecraft_name_history
-                WHERE discord_id = ?
+                WHERE discord_id = %s
                 ORDER BY changed_at DESC
-                LIMIT ?
+                LIMIT %s
             ''', (discord_id, limit))
 
             rows = cursor.fetchall()
@@ -325,7 +307,7 @@ class DatabaseManager:
             return [dict(row) for row in rows]
 
         except Exception as e:
-            print(f"❌ 닉네임 히스토리 조회 실패: {e}")
+            print(f"[ERROR] 닉네임 히스토리 조회 실패: {e}")
             return []
 
     def search_by_minecraft_name(self, minecraft_name: str) -> List[Dict]:
@@ -340,14 +322,14 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-            # 현재 닉네임 또는 과거 닉네임에서 검색
+            # 현재 닉네임 또는 과거 닉네임에서 검색 (ILIKE로 대소문자 무시)
             cursor.execute('''
                 SELECT DISTINCT u.*
                 FROM users u
                 LEFT JOIN minecraft_name_history h ON u.discord_id = h.discord_id
-                WHERE u.current_minecraft_name LIKE ? OR h.minecraft_name LIKE ?
+                WHERE u.current_minecraft_name ILIKE %s OR h.minecraft_name ILIKE %s
             ''', (f'%{minecraft_name}%', f'%{minecraft_name}%'))
 
             rows = cursor.fetchall()
@@ -356,7 +338,7 @@ class DatabaseManager:
             return [dict(row) for row in rows]
 
         except Exception as e:
-            print(f"❌ 닉네임 검색 실패: {e}")
+            print(f"[ERROR] 닉네임 검색 실패: {e}")
             return []
 
     def search_by_uuid(self, minecraft_uuid: str) -> Optional[Dict]:
@@ -371,9 +353,9 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-            cursor.execute('SELECT * FROM users WHERE minecraft_uuid = ?', (minecraft_uuid,))
+            cursor.execute('SELECT * FROM users WHERE minecraft_uuid = %s', (minecraft_uuid,))
             row = cursor.fetchone()
 
             conn.close()
@@ -383,7 +365,7 @@ class DatabaseManager:
             return None
 
         except Exception as e:
-            print(f"❌ UUID 검색 실패: {e}")
+            print(f"[ERROR] UUID 검색 실패: {e}")
             return None
 
     def get_all_users(self, limit: int = None, offset: int = 0) -> List[Dict]:
@@ -399,7 +381,7 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             if limit is None:
                 # limit이 None이면 전체 조회
@@ -412,7 +394,7 @@ class DatabaseManager:
                 cursor.execute('''
                     SELECT * FROM users
                     ORDER BY last_updated DESC
-                    LIMIT ? OFFSET ?
+                    LIMIT %s OFFSET %s
                 ''', (limit, offset))
 
             rows = cursor.fetchall()
@@ -421,14 +403,14 @@ class DatabaseManager:
             return [dict(row) for row in rows]
 
         except Exception as e:
-            print(f"❌ 전체 사용자 조회 실패: {e}")
+            print(f"[ERROR] 전체 사용자 조회 실패: {e}")
             return []
 
     def get_total_users(self) -> int:
         """전체 사용자 수 조회"""
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             cursor.execute('SELECT COUNT(*) as count FROM users')
             result = cursor.fetchone()
@@ -438,14 +420,14 @@ class DatabaseManager:
             return result['count'] if result else 0
 
         except Exception as e:
-            print(f"❌ 사용자 수 조회 실패: {e}")
+            print(f"[ERROR] 사용자 수 조회 실패: {e}")
             return 0
 
     def get_statistics(self) -> Dict:
         """데이터베이스 통계 정보 조회"""
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # 전체 사용자 수
             cursor.execute('SELECT COUNT(*) as count FROM users')
@@ -458,7 +440,7 @@ class DatabaseManager:
             # 최근 24시간 내 업데이트된 사용자 수
             cursor.execute('''
                 SELECT COUNT(*) as count FROM users
-                WHERE last_updated >= datetime('now', '-1 day')
+                WHERE last_updated >= NOW() - INTERVAL '1 day'
             ''')
             recent_updates = cursor.fetchone()['count']
 
@@ -482,7 +464,7 @@ class DatabaseManager:
             }
 
         except Exception as e:
-            print(f"❌ 통계 조회 실패: {e}")
+            print(f"[ERROR] 통계 조회 실패: {e}")
             return {}
 
     def delete_user(self, discord_id: int) -> bool:
@@ -500,19 +482,19 @@ class DatabaseManager:
             cursor = conn.cursor()
 
             # 히스토리 먼저 삭제
-            cursor.execute('DELETE FROM minecraft_name_history WHERE discord_id = ?', (discord_id,))
+            cursor.execute('DELETE FROM minecraft_name_history WHERE discord_id = %s', (discord_id,))
 
             # 사용자 정보 삭제
-            cursor.execute('DELETE FROM users WHERE discord_id = ?', (discord_id,))
+            cursor.execute('DELETE FROM users WHERE discord_id = %s', (discord_id,))
 
             conn.commit()
             conn.close()
 
-            print(f"🗑️ 사용자 정보 삭제: {discord_id}")
+            print(f"[DELETE] 사용자 정보 삭제: {discord_id}")
             return True
 
         except Exception as e:
-            print(f"❌ 사용자 삭제 실패: {e}")
+            print(f"[ERROR] 사용자 삭제 실패: {e}")
             return False
 
     def cleanup_old_history(self, days: int = 365) -> int:
@@ -531,7 +513,7 @@ class DatabaseManager:
 
             cursor.execute('''
                 DELETE FROM minecraft_name_history
-                WHERE changed_at < datetime('now', '-' || ? || ' days')
+                WHERE changed_at < NOW() - INTERVAL '%s days'
             ''', (days,))
 
             deleted_count = cursor.rowcount
@@ -539,11 +521,11 @@ class DatabaseManager:
             conn.commit()
             conn.close()
 
-            print(f"🗑️ {days}일 이전 히스토리 {deleted_count}개 삭제")
+            print(f"[CLEANUP] {days}일 이전 히스토리 {deleted_count}개 삭제")
             return deleted_count
 
         except Exception as e:
-            print(f"❌ 히스토리 정리 실패: {e}")
+            print(f"[ERROR] 히스토리 정리 실패: {e}")
             return 0
 
     def add_nation_history(self, discord_id: int, nation_name: str = None, nation_uuid: str = None,
@@ -566,13 +548,13 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # 가장 최근 국가 히스토리 조회
             cursor.execute('''
                 SELECT nation_name, nation_uuid, town_name, town_uuid, nation_ranks, town_ranks
                 FROM nation_history
-                WHERE discord_id = ?
+                WHERE discord_id = %s
                 ORDER BY changed_at DESC
                 LIMIT 1
             ''', (discord_id,))
@@ -594,17 +576,17 @@ class DatabaseManager:
             # 새 히스토리 추가
             cursor.execute('''
                 INSERT INTO nation_history (discord_id, nation_name, nation_uuid, town_name, town_uuid, nation_ranks, town_ranks)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             ''', (discord_id, nation_name, nation_uuid, town_name, town_uuid, nation_ranks, town_ranks))
 
             conn.commit()
             conn.close()
 
-            print(f"📝 국가 히스토리 추가: {discord_id} - {nation_name}/{town_name} (국가 계급: {nation_ranks}, 마을 계급: {town_ranks})")
+            print(f"[ADD] 국가 히스토리 추가: {discord_id} - {nation_name}/{town_name} (국가 계급: {nation_ranks}, 마을 계급: {town_ranks})")
             return True
 
         except Exception as e:
-            print(f"❌ 국가 히스토리 저장 실패: {e}")
+            print(f"[ERROR] 국가 히스토리 저장 실패: {e}")
             return False
 
     def get_nation_history(self, discord_id: int, limit: int = 10) -> List[Dict]:
@@ -620,13 +602,13 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             cursor.execute('''
                 SELECT * FROM nation_history
-                WHERE discord_id = ?
+                WHERE discord_id = %s
                 ORDER BY changed_at DESC
-                LIMIT ?
+                LIMIT %s
             ''', (discord_id, limit))
 
             rows = cursor.fetchall()
@@ -635,7 +617,7 @@ class DatabaseManager:
             return [dict(row) for row in rows]
 
         except Exception as e:
-            print(f"❌ 국가 히스토리 조회 실패: {e}")
+            print(f"[ERROR] 국가 히스토리 조회 실패: {e}")
             return []
 
     def get_current_nation(self, discord_id: int) -> Optional[Dict]:
@@ -659,12 +641,12 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             cursor.execute('''
                 SELECT nation_name, nation_uuid, town_name, town_uuid, nation_ranks, town_ranks, changed_at
                 FROM nation_history
-                WHERE discord_id = ?
+                WHERE discord_id = %s
                 ORDER BY changed_at DESC
                 LIMIT 1
             ''', (discord_id,))
@@ -677,7 +659,7 @@ class DatabaseManager:
             return None
 
         except Exception as e:
-            print(f"❌ 현재 국가 조회 실패: {e}")
+            print(f"[ERROR] 현재 국가 조회 실패: {e}")
             return None
 
     def export_to_json(self, output_file: str = "database_export.json") -> bool:
@@ -692,7 +674,7 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # 모든 사용자 조회
             cursor.execute('SELECT * FROM users')
@@ -714,11 +696,11 @@ class DatabaseManager:
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, ensure_ascii=False, indent=2, default=str)
 
-            print(f"📤 데이터베이스 내보내기 완료: {output_file}")
+            print(f"[EXPORT] 데이터베이스 내보내기 완료: {output_file}")
             return True
 
         except Exception as e:
-            print(f"❌ 데이터베이스 내보내기 실패: {e}")
+            print(f"[ERROR] 데이터베이스 내보내기 실패: {e}")
             return False
 
     def set_callsign(self, discord_id: int, callsign: str, admin_override: bool = False) -> bool:
@@ -735,14 +717,14 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # 기존 콜사인 확인
-            cursor.execute('SELECT callsign, admin_override FROM callsigns WHERE discord_id = ?', (discord_id,))
+            cursor.execute('SELECT callsign, admin_override FROM callsigns WHERE discord_id = %s', (discord_id,))
             existing = cursor.fetchone()
 
             # 이미 같은 콜사인이 저장되어 있으면 건너뛰기
-            if existing and existing[0] == callsign and existing[1] == (1 if admin_override else 0):
+            if existing and existing['callsign'] == callsign and existing['admin_override'] == (1 if admin_override else 0):
                 conn.close()
                 return True  # 중복 저장 방지, 로그 없이 조용히 성공 반환
 
@@ -750,31 +732,31 @@ class DatabaseManager:
                 # 기존 콜사인이 있으면 업데이트
                 cursor.execute('''
                     UPDATE callsigns
-                    SET callsign = ?, set_at = ?, admin_override = ?
-                    WHERE discord_id = ?
+                    SET callsign = %s, set_at = %s, admin_override = %s
+                    WHERE discord_id = %s
                 ''', (callsign, datetime.now(), 1 if admin_override else 0, discord_id))
 
                 # 콜사인이 변경된 경우에만 히스토리에 추가
                 cursor.execute('''
                     INSERT INTO callsign_history (discord_id, callsign, set_at, admin_override)
-                    VALUES (?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s)
                 ''', (discord_id, callsign, datetime.now(), 1 if admin_override else 0))
 
-                print(f"✅ DB에 콜사인 업데이트 완료: {discord_id} -> {callsign}")
+                print(f"[OK] DB에 콜사인 업데이트 완료: {discord_id} -> {callsign}")
             else:
                 # 새로운 콜사인 추가
                 cursor.execute('''
                     INSERT INTO callsigns (discord_id, callsign, set_at, admin_override)
-                    VALUES (?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s)
                 ''', (discord_id, callsign, datetime.now(), 1 if admin_override else 0))
 
                 # 새로운 콜사인 히스토리에 추가
                 cursor.execute('''
                     INSERT INTO callsign_history (discord_id, callsign, set_at, admin_override)
-                    VALUES (?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s)
                 ''', (discord_id, callsign, datetime.now(), 1 if admin_override else 0))
 
-                print(f"✅ DB에 콜사인 저장 완료: {discord_id} -> {callsign}")
+                print(f"[OK] DB에 콜사인 저장 완료: {discord_id} -> {callsign}")
 
             conn.commit()
             conn.close()
@@ -782,7 +764,7 @@ class DatabaseManager:
             return True
 
         except Exception as e:
-            print(f"❌ DB 콜사인 저장 실패: {e}")
+            print(f"[ERROR] DB 콜사인 저장 실패: {e}")
             return False
 
     def get_callsign(self, discord_id: int) -> Optional[str]:
@@ -797,16 +779,16 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-            cursor.execute('SELECT callsign FROM callsigns WHERE discord_id = ?', (discord_id,))
+            cursor.execute('SELECT callsign FROM callsigns WHERE discord_id = %s', (discord_id,))
             result = cursor.fetchone()
             conn.close()
 
             return result['callsign'] if result else None
 
         except Exception as e:
-            print(f"❌ DB 콜사인 조회 실패: {e}")
+            print(f"[ERROR] DB 콜사인 조회 실패: {e}")
             return None
 
     def get_callsign_history(self, discord_id: int) -> List[Dict]:
@@ -821,12 +803,12 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             cursor.execute('''
                 SELECT callsign, set_at, admin_override
                 FROM callsign_history
-                WHERE discord_id = ?
+                WHERE discord_id = %s
                 ORDER BY set_at DESC
             ''', (discord_id,))
 
@@ -844,7 +826,7 @@ class DatabaseManager:
             return history
 
         except Exception as e:
-            print(f"❌ 콜사인 히스토리 조회 실패: {e}")
+            print(f"[ERROR] 콜사인 히스토리 조회 실패: {e}")
             return []
 
     def delete_callsign(self, discord_id: int) -> bool:
@@ -861,16 +843,16 @@ class DatabaseManager:
             conn = self.get_connection()
             cursor = conn.cursor()
 
-            cursor.execute('DELETE FROM callsigns WHERE discord_id = ?', (discord_id,))
+            cursor.execute('DELETE FROM callsigns WHERE discord_id = %s', (discord_id,))
 
             conn.commit()
             conn.close()
 
-            print(f"✅ DB에서 콜사인 삭제 완료: {discord_id}")
+            print(f"[OK] DB에서 콜사인 삭제 완료: {discord_id}")
             return True
 
         except Exception as e:
-            print(f"❌ DB 콜사인 삭제 실패: {e}")
+            print(f"[ERROR] DB 콜사인 삭제 실패: {e}")
             return False
 
     def set_cooldown(self, discord_id: int, cooldown_end: datetime) -> bool:
@@ -886,24 +868,24 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             # 기존 쿨타임 확인
-            cursor.execute('SELECT discord_id FROM callsign_cooldowns WHERE discord_id = ?', (discord_id,))
+            cursor.execute('SELECT discord_id FROM callsign_cooldowns WHERE discord_id = %s', (discord_id,))
             existing = cursor.fetchone()
 
             if existing:
                 # 기존 쿨타임 업데이트
                 cursor.execute('''
                     UPDATE callsign_cooldowns
-                    SET cooldown_end = ?, set_at = ?
-                    WHERE discord_id = ?
+                    SET cooldown_end = %s, set_at = %s
+                    WHERE discord_id = %s
                 ''', (cooldown_end, datetime.now(), discord_id))
             else:
                 # 새로운 쿨타임 추가
                 cursor.execute('''
                     INSERT INTO callsign_cooldowns (discord_id, cooldown_end, set_at)
-                    VALUES (?, ?, ?)
+                    VALUES (%s, %s, %s)
                 ''', (discord_id, cooldown_end, datetime.now()))
 
             conn.commit()
@@ -911,7 +893,7 @@ class DatabaseManager:
             return True
 
         except Exception as e:
-            print(f"❌ DB 쿨타임 저장 실패: {e}")
+            print(f"[ERROR] DB 쿨타임 저장 실패: {e}")
             return False
 
     def get_cooldown(self, discord_id: int) -> Optional[datetime]:
@@ -926,21 +908,24 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-            cursor.execute('SELECT cooldown_end FROM callsign_cooldowns WHERE discord_id = ?', (discord_id,))
+            cursor.execute('SELECT cooldown_end FROM callsign_cooldowns WHERE discord_id = %s', (discord_id,))
             result = cursor.fetchone()
             conn.close()
 
             if result:
-                # 문자열을 datetime 객체로 변환
-                cooldown_str = result['cooldown_end']
-                return datetime.fromisoformat(cooldown_str) if isinstance(cooldown_str, str) else cooldown_str
+                cooldown_val = result['cooldown_end']
+                # PostgreSQL은 datetime 객체를 직접 반환
+                if isinstance(cooldown_val, datetime):
+                    return cooldown_val
+                elif isinstance(cooldown_val, str):
+                    return datetime.fromisoformat(cooldown_val)
 
             return None
 
         except Exception as e:
-            print(f"❌ DB 쿨타임 조회 실패: {e}")
+            print(f"[ERROR] DB 쿨타임 조회 실패: {e}")
             return None
 
     def delete_cooldown(self, discord_id: int) -> bool:
@@ -957,16 +942,16 @@ class DatabaseManager:
             conn = self.get_connection()
             cursor = conn.cursor()
 
-            cursor.execute('DELETE FROM callsign_cooldowns WHERE discord_id = ?', (discord_id,))
+            cursor.execute('DELETE FROM callsign_cooldowns WHERE discord_id = %s', (discord_id,))
 
             conn.commit()
             conn.close()
 
-            print(f"✅ DB에서 쿨타임 삭제 완료: {discord_id}")
+            print(f"[OK] DB에서 쿨타임 삭제 완료: {discord_id}")
             return True
 
         except Exception as e:
-            print(f"❌ DB 쿨타임 삭제 실패: {e}")
+            print(f"[ERROR] DB 쿨타임 삭제 실패: {e}")
             return False
 
     def delete_all_cooldowns(self) -> int:
@@ -986,11 +971,11 @@ class DatabaseManager:
             conn.commit()
             conn.close()
 
-            print(f"✅ DB에서 모든 쿨타임 삭제 완료: {deleted_count}개")
+            print(f"[OK] DB에서 모든 쿨타임 삭제 완료: {deleted_count}개")
             return deleted_count
 
         except Exception as e:
-            print(f"❌ DB 모든 쿨타임 삭제 실패: {e}")
+            print(f"[ERROR] DB 모든 쿨타임 삭제 실패: {e}")
             return 0
 
     # ===== 모든 플레이어 정보 관리 (all_players 테이블) =====
@@ -1022,11 +1007,17 @@ class DatabaseManager:
                 if not uuid or not name:
                     continue
 
-                # UPSERT (INSERT OR REPLACE)
+                # UPSERT (INSERT ... ON CONFLICT DO UPDATE)
                 cursor.execute('''
-                    INSERT OR REPLACE INTO all_players
-                    (uuid, name, nation, town, nation_ranks, town_ranks, last_updated)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO all_players (uuid, name, nation, town, nation_ranks, town_ranks, last_updated)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (uuid) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        nation = EXCLUDED.nation,
+                        town = EXCLUDED.town,
+                        nation_ranks = EXCLUDED.nation_ranks,
+                        town_ranks = EXCLUDED.town_ranks,
+                        last_updated = EXCLUDED.last_updated
                 ''', (uuid, name, nation, town, nation_ranks, town_ranks, datetime.now()))
 
                 saved_count += 1
@@ -1037,7 +1028,7 @@ class DatabaseManager:
             return saved_count
 
         except Exception as e:
-            print(f"❌ 모든 플레이어 정보 저장 실패: {e}")
+            print(f"[ERROR] 모든 플레이어 정보 저장 실패: {e}")
             return 0
 
     def get_player_by_uuid(self, uuid: str) -> Optional[Dict]:
@@ -1052,9 +1043,9 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-            cursor.execute('SELECT * FROM all_players WHERE uuid = ?', (uuid,))
+            cursor.execute('SELECT * FROM all_players WHERE uuid = %s', (uuid,))
             row = cursor.fetchone()
 
             conn.close()
@@ -1064,7 +1055,7 @@ class DatabaseManager:
             return None
 
         except Exception as e:
-            print(f"❌ 플레이어 UUID 조회 실패: {e}")
+            print(f"[ERROR] 플레이어 UUID 조회 실패: {e}")
             return None
 
     def get_player_by_name(self, name: str) -> Optional[Dict]:
@@ -1079,9 +1070,9 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-            cursor.execute('SELECT * FROM all_players WHERE name = ? COLLATE NOCASE', (name,))
+            cursor.execute('SELECT * FROM all_players WHERE name ILIKE %s', (name,))
             row = cursor.fetchone()
 
             conn.close()
@@ -1091,7 +1082,7 @@ class DatabaseManager:
             return None
 
         except Exception as e:
-            print(f"❌ 플레이어 이름 조회 실패: {e}")
+            print(f"[ERROR] 플레이어 이름 조회 실패: {e}")
             return None
 
     def get_all_players(self, limit: int = None, offset: int = 0) -> List[Dict]:
@@ -1107,7 +1098,7 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             if limit is None:
                 cursor.execute('''
@@ -1118,7 +1109,7 @@ class DatabaseManager:
                 cursor.execute('''
                     SELECT * FROM all_players
                     ORDER BY last_updated DESC
-                    LIMIT ? OFFSET ?
+                    LIMIT %s OFFSET %s
                 ''', (limit, offset))
 
             rows = cursor.fetchall()
@@ -1127,7 +1118,7 @@ class DatabaseManager:
             return [dict(row) for row in rows]
 
         except Exception as e:
-            print(f"❌ 모든 플레이어 조회 실패: {e}")
+            print(f"[ERROR] 모든 플레이어 조회 실패: {e}")
             return []
 
     def get_players_by_nation(self, nation_name: str) -> List[Dict]:
@@ -1142,11 +1133,11 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             cursor.execute('''
                 SELECT * FROM all_players
-                WHERE nation = ? COLLATE NOCASE
+                WHERE nation ILIKE %s
                 ORDER BY name
             ''', (nation_name,))
 
@@ -1156,7 +1147,7 @@ class DatabaseManager:
             return [dict(row) for row in rows]
 
         except Exception as e:
-            print(f"❌ 국가별 플레이어 조회 실패: {e}")
+            print(f"[ERROR] 국가별 플레이어 조회 실패: {e}")
             return []
 
     def get_players_by_town(self, town_name: str) -> List[Dict]:
@@ -1171,11 +1162,11 @@ class DatabaseManager:
         """
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             cursor.execute('''
                 SELECT * FROM all_players
-                WHERE town = ? COLLATE NOCASE
+                WHERE town ILIKE %s
                 ORDER BY name
             ''', (town_name,))
 
@@ -1185,14 +1176,14 @@ class DatabaseManager:
             return [dict(row) for row in rows]
 
         except Exception as e:
-            print(f"❌ 마을별 플레이어 조회 실패: {e}")
+            print(f"[ERROR] 마을별 플레이어 조회 실패: {e}")
             return []
 
     def get_total_players(self) -> int:
         """전체 플레이어 수 조회 (all_players 테이블)"""
         try:
             conn = self.get_connection()
-            cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
 
             cursor.execute('SELECT COUNT(*) as count FROM all_players')
             result = cursor.fetchone()
@@ -1202,10 +1193,10 @@ class DatabaseManager:
             return result['count'] if result else 0
 
         except Exception as e:
-            print(f"❌ 플레이어 수 조회 실패: {e}")
+            print(f"[ERROR] 플레이어 수 조회 실패: {e}")
             return 0
 
 
 # 전역 데이터베이스 관리자 인스턴스
 db_manager = DatabaseManager()
-print("✅ DatabaseManager 인스턴스 생성됨")
+print("[OK] DatabaseManager 인스턴스 생성됨")

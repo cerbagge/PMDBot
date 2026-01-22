@@ -61,11 +61,18 @@ class DatabasePaginationView(discord.ui.View):
             member = self.guild.get_member(int(user['discord_id']))
             member_name = member.name if member else f"Unknown"
 
+            # datetime 객체 처리
+            last_updated = user['last_updated']
+            if hasattr(last_updated, 'strftime'):
+                last_updated = last_updated.strftime('%Y-%m-%d')
+            elif isinstance(last_updated, str):
+                last_updated = last_updated[:10]
+
             embed.add_field(
                 name=f"{i}. {member_name}",
                 value=f"**MC:** `{user['current_minecraft_name']}`\n"
                       f"**UUID:** `{user['minecraft_uuid']}`\n"
-                      f"**업데이트:** {user['last_updated'][:10]}",
+                      f"**업데이트:** {last_updated}",
                 inline=True
             )
 
@@ -158,10 +165,22 @@ def setup(bot):
                 inline=False
             )
 
+            # datetime 객체 처리 (PostgreSQL은 datetime 객체 반환)
+            first_seen = user_info['first_seen']
+            last_updated = user_info['last_updated']
+            if hasattr(first_seen, 'strftime'):
+                first_seen = first_seen.strftime('%Y-%m-%d %H:%M:%S')
+            elif isinstance(first_seen, str):
+                first_seen = first_seen[:19]
+            if hasattr(last_updated, 'strftime'):
+                last_updated = last_updated.strftime('%Y-%m-%d %H:%M:%S')
+            elif isinstance(last_updated, str):
+                last_updated = last_updated[:19]
+
             embed.add_field(
                 name="📅 기록",
-                value=f"**첫 기록:** {user_info['first_seen'][:19]}\n"
-                      f"**최근 업데이트:** {user_info['last_updated'][:19]}",
+                value=f"**첫 기록:** {first_seen}\n"
+                      f"**최근 업데이트:** {last_updated}",
                 inline=False
             )
 
@@ -198,10 +217,15 @@ def setup(bot):
                 )
 
             if name_history:
-                history_text = "\n".join([
-                    f"{i+1}. `{h['minecraft_name']}` - {h['changed_at'][:19]}"
-                    for i, h in enumerate(name_history[:5])
-                ])
+                history_lines = []
+                for i, h in enumerate(name_history[:5]):
+                    changed_at = h['changed_at']
+                    if hasattr(changed_at, 'strftime'):
+                        changed_at = changed_at.strftime('%Y-%m-%d %H:%M:%S')
+                    elif isinstance(changed_at, str):
+                        changed_at = changed_at[:19]
+                    history_lines.append(f"{i+1}. `{h['minecraft_name']}` - {changed_at}")
+                history_text = "\n".join(history_lines)
                 embed.add_field(
                     name=f"📝 닉네임 히스토리 (최근 5개)",
                     value=history_text or "히스토리 없음",
@@ -245,10 +269,28 @@ def setup(bot):
                     inline=False
                 )
 
+                # datetime 객체 처리 (PostgreSQL은 datetime 객체 반환)
+                first_seen = user.get('first_seen')
+                last_updated = user.get('last_updated')
+                if first_seen:
+                    if hasattr(first_seen, 'strftime'):
+                        first_seen = first_seen.strftime('%Y-%m-%d %H:%M:%S')
+                    elif isinstance(first_seen, str):
+                        first_seen = first_seen[:19]
+                else:
+                    first_seen = 'N/A'
+                if last_updated:
+                    if hasattr(last_updated, 'strftime'):
+                        last_updated = last_updated.strftime('%Y-%m-%d %H:%M:%S')
+                    elif isinstance(last_updated, str):
+                        last_updated = last_updated[:19]
+                else:
+                    last_updated = 'N/A'
+
                 embed.add_field(
                     name="📅 기록",
-                    value=f"**첫 기록:** {user['first_seen'][:19] if user.get('first_seen') else 'N/A'}\n"
-                          f"**최근 업데이트:** {user['last_updated'][:19] if user.get('last_updated') else 'N/A'}",
+                    value=f"**첫 기록:** {first_seen}\n"
+                          f"**최근 업데이트:** {last_updated}",
                     inline=False
                 )
 
@@ -286,10 +328,15 @@ def setup(bot):
                     )
 
                 if name_history:
-                    history_text = "\n".join([
-                        f"{i+1}. `{h['minecraft_name']}` - {h['changed_at'][:19]}"
-                        for i, h in enumerate(name_history[:5])
-                    ])
+                    history_lines = []
+                    for i, h in enumerate(name_history[:5]):
+                        changed_at = h['changed_at']
+                        if hasattr(changed_at, 'strftime'):
+                            changed_at = changed_at.strftime('%Y-%m-%d %H:%M:%S')
+                        elif isinstance(changed_at, str):
+                            changed_at = changed_at[:19]
+                        history_lines.append(f"{i+1}. `{h['minecraft_name']}` - {changed_at}")
+                    history_text = "\n".join(history_lines)
                     embed.add_field(
                         name=f"📝 닉네임 히스토리 (최근 5개)",
                         value=history_text or "히스토리 없음",
@@ -322,7 +369,12 @@ def setup(bot):
                     value_text += f"**UUID:** `{user['minecraft_uuid']}`\n"
 
                     if user.get('last_updated'):
-                        value_text += f"**최근 업데이트:** {user['last_updated'][:19]}\n"
+                        last_upd = user['last_updated']
+                        if hasattr(last_upd, 'strftime'):
+                            last_upd = last_upd.strftime('%Y-%m-%d %H:%M:%S')
+                        elif isinstance(last_upd, str):
+                            last_upd = last_upd[:19]
+                        value_text += f"**최근 업데이트:** {last_upd}\n"
 
                     if history_count > 1:
                         value_text += f"**닉네임 변경:** {history_count}회"

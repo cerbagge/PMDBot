@@ -43,90 +43,76 @@ bot = commands.Bot(command_prefix="/", intents=intents)
 async def clear_and_sync_commands():
     """모든 기존 명령어를 완전히 삭제하고 새로운 명령어를 등록하는 함수"""
     try:
-        print("🧹 모든 슬래시 명령어 완전 삭제 및 재등록 시작...")
-        
+        print("[CLEAN] 모든 슬래시 명령어 완전 삭제 및 재등록 시작...")
+
         # Step 1: 전역 명령어 완전 삭제
-        print("🌍 전역 명령어 완전 삭제 중...")
+        print("[GLOBAL] 전역 명령어 완전 삭제 중...")
         try:
-            existing_global_commands = await bot.tree.fetch_commands()
-            print(f"📋 기존 전역 명령어 {len(existing_global_commands)}개 발견")
-            
+            existing_global_commands = await asyncio.wait_for(
+                bot.tree.fetch_commands(),
+                timeout=30.0
+            )
+            print(f"[INFO] 기존 전역 명령어 {len(existing_global_commands)}개 발견")
+
             # 전역 명령어 삭제
             bot.tree.clear_commands(guild=None)
-            await bot.tree.sync()
-            print(f"✅ {len(existing_global_commands)}개 전역 명령어 삭제 완료")
-            
-            # 전역 명령어 삭제 반영 대기
+            await asyncio.wait_for(bot.tree.sync(), timeout=30.0)
+            print(f"[OK] {len(existing_global_commands)}개 전역 명령어 삭제 완료")
+
+            # 전역 명령어 삭제 반영 대기 (짧게)
             if existing_global_commands:
-                print("⏳ 전역 명령어 삭제 반영 대기 중... (15초)")
-                await asyncio.sleep(15)
+                print("[WAIT] 전역 명령어 삭제 반영 대기 중... (3초)")
+                await asyncio.sleep(3)
+        except asyncio.TimeoutError:
+            print("[WARN] 전역 명령어 삭제 타임아웃 - 계속 진행")
         except Exception as e:
-            print(f"⚠️ 전역 명령어 삭제 오류: {e}")
-        
+            print(f"[WARN] 전역 명령어 삭제 오류: {e}")
+
         # Step 2: 길드 명령어 완전 삭제 (설정된 경우)
         if config.GUILD_ID:
-            print(f"🏰 길드 {config.GUILD_ID} 명령어 완전 삭제 중...")
+            print(f"[GUILD] 길드 {config.GUILD_ID} 명령어 완전 삭제 중...")
             try:
                 guild = discord.Object(id=config.GUILD_ID)
-                existing_guild_commands = await bot.tree.fetch_commands(guild=guild)
-                print(f"📋 기존 길드 명령어 {len(existing_guild_commands)}개 발견")
-                
+                existing_guild_commands = await asyncio.wait_for(
+                    bot.tree.fetch_commands(guild=guild),
+                    timeout=30.0
+                )
+                print(f"[INFO] 기존 길드 명령어 {len(existing_guild_commands)}개 발견")
+
                 # 길드 명령어 삭제
                 bot.tree.clear_commands(guild=guild)
-                await bot.tree.sync(guild=guild)
-                print(f"✅ {len(existing_guild_commands)}개 길드 명령어 삭제 완료")
-                
-                # 길드 명령어 삭제 반영 대기
+                await asyncio.wait_for(bot.tree.sync(guild=guild), timeout=30.0)
+                print(f"[OK] {len(existing_guild_commands)}개 길드 명령어 삭제 완료")
+
+                # 길드 명령어 삭제 반영 대기 (짧게)
                 if existing_guild_commands:
-                    print("⏳ 길드 명령어 삭제 반영 대기 중... (5초)")
-                    await asyncio.sleep(5)
+                    print("[WAIT] 길드 명령어 삭제 반영 대기 중... (2초)")
+                    await asyncio.sleep(2)
+            except asyncio.TimeoutError:
+                print("[WARN] 길드 명령어 삭제 타임아웃 - 계속 진행")
             except Exception as e:
-                print(f"⚠️ 길드 명령어 삭제 오류: {e}")
-        
-        # Step 3: 추가 대기 시간 (완전한 삭제 보장)
-        print("⏳ 명령어 삭제 완전 반영 대기 중... (10초)")
-        await asyncio.sleep(10)
-        
-        # Step 4: 삭제 확인
-        print("🔍 삭제 완료 확인 중...")
-        try:
-            remaining_global = await bot.tree.fetch_commands()
-            remaining_count = len(remaining_global)
-            
-            if config.GUILD_ID:
-                guild = discord.Object(id=config.GUILD_ID)
-                remaining_guild = await bot.tree.fetch_commands(guild=guild)
-                guild_count = len(remaining_guild)
-                print(f"📊 삭제 후 잔여 명령어 - 전역: {remaining_count}개, 길드: {guild_count}개")
-            else:
-                print(f"📊 삭제 후 잔여 전역 명령어: {remaining_count}개")
-            
-            if remaining_count > 0 or (config.GUILD_ID and guild_count > 0):
-                print("⚠️ 일부 명령어가 아직 남아있습니다. 추가 대기...")
-                await asyncio.sleep(10)
-            else:
-                print("✅ 모든 명령어 삭제 확인 완료!")
-                
-        except Exception as e:
-            print(f"⚠️ 삭제 확인 중 오류: {e}")
-        
-        print("🧹 명령어 완전 삭제 작업 완료!")
-        print("⏳ 새로운 명령어 등록을 위해 확장 로드를 기다립니다...")
+                print(f"[WARN] 길드 명령어 삭제 오류: {e}")
+
+        # Step 3: 짧은 대기
+        print("[WAIT] 명령어 삭제 반영 대기 중... (2초)")
+        await asyncio.sleep(2)
+
+        print("[DONE] 명령어 삭제 작업 완료!")
         return True
-        
+
     except discord.Forbidden:
-        print("❌ 명령어 관리 권한이 없습니다!")
-        print("💡 봇에 다음 권한이 있는지 확인하세요:")
+        print("[ERROR] 명령어 관리 권한이 없습니다!")
+        print("[INFO] 봇에 다음 권한이 있는지 확인하세요:")
         print("   - applications.commands (슬래시 명령어)")
         print("   - Use Slash Commands")
         return False
     except discord.HTTPException as e:
-        print(f"❌ Discord API 오류: {e}")
-        if "429" in str(e):
-            print("💡 너무 많은 요청으로 인한 제한입니다. 잠시 후 다시 시도하세요.")
+        print(f"[ERROR] Discord API 오류: {e}")
+        if e.status == 429:
+            print("[INFO] Rate limit에 걸렸습니다. 잠시 후 다시 시도해주세요.")
         return False
     except Exception as e:
-        print(f"❌ 명령어 삭제 실패: {e}")
+        print(f"[ERROR] 명령어 삭제 실패: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -134,42 +120,64 @@ async def clear_and_sync_commands():
 async def register_new_commands():
     """확장 로드 후 새로운 명령어를 등록하는 함수"""
     try:
-        print("\n📝 새로운 슬래시 명령어 등록 시작...")
-        
+        print("\n[CMD] 새로운 슬래시 명령어 등록 시작...")
+
         # 등록 가능한 명령어 확인
         available_commands = bot.tree.get_commands()
-        print(f"🔍 로드된 명령어 {len(available_commands)}개 발견")
-        
+        print(f"[INFO] 로드된 명령어 {len(available_commands)}개 발견")
+
         if not available_commands:
-            print("⚠️ 등록할 명령어가 없습니다! 확장이 제대로 로드되었는지 확인하세요.")
+            print("[WARN] 등록할 명령어가 없습니다! 확장이 제대로 로드되었는지 확인하세요.")
             return False
-            
+
         if config.GUILD_ID:
             # 길드 명령어로 등록
-            print(f"🏰 길드 {config.GUILD_ID}에 명령어 등록 중...")
+            print(f"[GUILD] 길드 {config.GUILD_ID}에 명령어 등록 중...")
             guild = discord.Object(id=config.GUILD_ID)
             bot.tree.copy_global_to(guild=guild)
-            synced_commands = await bot.tree.sync(guild=guild)
-            print(f"✅ 길드에 {len(synced_commands)}개 명령어 등록 완료")
-            
+
+            # 타임아웃 설정 (60초)
+            try:
+                synced_commands = await asyncio.wait_for(
+                    bot.tree.sync(guild=guild),
+                    timeout=60.0
+                )
+                print(f"[OK] 길드에 {len(synced_commands)}개 명령어 등록 완료")
+            except asyncio.TimeoutError:
+                print("[WARN] 명령어 동기화 타임아웃 (60초) - Discord API가 느립니다")
+                print("[INFO] 명령어가 등록되었을 수 있습니다. Discord에서 확인해주세요.")
+                return True
+
         else:
             # 전역 명령어로 등록
-            print("🌍 전역 명령어 등록 중...")
-            synced_commands = await bot.tree.sync()
-            print(f"✅ {len(synced_commands)}개 전역 명령어 등록 완료 (최대 1시간 후 반영)")
-        
+            print("[GLOBAL] 전역 명령어 등록 중...")
+            try:
+                synced_commands = await asyncio.wait_for(
+                    bot.tree.sync(),
+                    timeout=60.0
+                )
+                print(f"[OK] {len(synced_commands)}개 전역 명령어 등록 완료 (최대 1시간 후 반영)")
+            except asyncio.TimeoutError:
+                print("[WARN] 명령어 동기화 타임아웃 (60초) - Discord API가 느립니다")
+                return True
+
         # 등록된 명령어 목록 출력
         if synced_commands:
-            print(f"📝 최종 등록된 명령어 ({len(synced_commands)}개):")
+            print(f"[CMD] 최종 등록된 명령어 ({len(synced_commands)}개):")
             for cmd in synced_commands:
                 description = cmd.description[:50] + "..." if len(cmd.description) > 50 else cmd.description
                 print(f"   - /{cmd.name}: {description}")
-        
-        print("🎉 새로운 명령어 등록 완료!")
+
+        print("[DONE] 새로운 명령어 등록 완료!")
         return True
-        
+
+    except discord.HTTPException as e:
+        print(f"[ERROR] Discord API 오류: {e}")
+        if e.status == 429:
+            print("[INFO] Rate limit에 걸렸습니다. 잠시 후 다시 시도해주세요.")
+        return False
     except Exception as e:
-        print(f"❌ 새로운 명령어 등록 실패: {e}")
+        print(f"[ERROR] 새로운 명령어 등록 실패: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -292,10 +300,17 @@ async def on_ready():
         from bulk_updater import bulk_data_manager
 
         print("\n" + "="*60)
-        print("📊 Bulk 데이터 자동 업데이트 시작")
+        print("[BULK] Bulk 데이터 자동 업데이트 시작")
         print("="*60)
         print("   - 업데이트 주기: 15분")
         print("   - API: https://api.planetearth.kr/resident/bulk")
+        print("   - Discord 자동 동기화: 활성화")
+        print("     * MC 닉네임 변경 -> Discord 별명 자동 변경")
+        print("     * 국가 변경 -> 역할 자동 처리")
+        print("     * 콜사인 -> 별명에 자동 포함")
+
+        # Discord bot 인스턴스 연결 (자동 닉네임/역할 변경용)
+        bulk_data_manager.set_bot(bot)
 
         # 백그라운드에서 자동 업데이트 시작
         asyncio.create_task(bulk_data_manager.start_auto_update())
@@ -303,10 +318,10 @@ async def on_ready():
         # bot 객체에 저장 (다른 모듈에서 사용 가능)
         bot.bulk_data_manager = bulk_data_manager
 
-        print("✅ Bulk 데이터 자동 업데이트 시작됨")
+        print("[OK] Bulk 데이터 자동 업데이트 시작됨")
 
     except Exception as e:
-        print(f"❌ Bulk 데이터 자동 업데이트 시작 실패: {e}")
+        print(f"[ERROR] Bulk 데이터 자동 업데이트 시작 실패: {e}")
         import traceback
         traceback.print_exc()
         bot.bulk_data_manager = None
@@ -315,197 +330,21 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-    """메시지 이벤트 처리 - &MF 명령어 감지 (특정 봇만)"""
+    """메시지 이벤트 처리 - command_loader를 통해 처리"""
     try:
-        # &MF 명령어 확인 (메시지 내 모든 줄 검사)
-        if '&MF' in message.content:
-            import re
-            from datetime import datetime
-
-            # 메시지에서 &MF 명령어가 있는 줄 찾기
-            lines = message.content.split('\n')
-            mf_line = None
-            for line in lines:
-                if line.strip().startswith('&MF'):
-                    mf_line = line.strip()
-                    break
-
-            if not mf_line:
-                return
-
-            # &MF 제거하고 나머지 텍스트 추출
-            content = mf_line[3:].strip()
-
-            print(f"🔍 &MF 명령어 감지! (봇: {message.author.name})")
-            print(f"📝 원본 메시지: {message.content}")
-            print(f"📝 처리된 내용: {content}")
-
-            # {대기열} 키워드 확인
-            is_queue_command = '{대기열}' in content or '{큐}' in content
-
-            # 디스코드 ID 추출
-            # 1. 유저 멘션 형태 (<@123456789> 또는 <@!123456789>)
-            user_mention_match = re.search(r'<@!?(\d{15,20})>', content)
-            if user_mention_match:
-                discord_id = int(user_mention_match.group(1))
-                print(f"✅ 유저 멘션에서 ID 추출: {discord_id}")
-            else:
-                # 2. 숫자만 있는 경우
-                discord_id_match = re.search(r'(\d{15,20})', content)
-                if not discord_id_match:
-                    await message.channel.send("디스코드 ID를 찾을 수 없습니다. 사용법: `&MF 디스코드ID` 또는 `&MF @유저멘션` 또는 `&MF {대기열} 디스코드ID`")
-                    return
-                discord_id = int(discord_id_match.group(1))
-                print(f"✅ 숫자에서 ID 추출: {discord_id}")
-
-            print(f"🎯 최종 Discord ID: {discord_id}")
-
-            # {대기열} 명령어 처리 (모든 봇에서 동작)
-            if is_queue_command:
-                print(f"📋 대기열 추가 명령어 감지: {discord_id}")
-                try:
-                    from queue_manager import queue_manager
-
-                    # 5초 이내 중복 요청 방지
-                    if not hasattr(bot, '_last_queue_request'):
-                        bot._last_queue_request = {}
-
-                    current_time = datetime.now()
-                    last_request_time = bot._last_queue_request.get(discord_id)
-
-                    if last_request_time:
-                        time_diff = (current_time - last_request_time).total_seconds()
-                        if time_diff < 5:
-                            print(f"⏱️ 5초 이내 중복 요청 무시: {discord_id} (경과: {time_diff:.1f}초)")
-                            return
-
-                    # 대기열에 추가
-                    if queue_manager.add_user(discord_id):
-                        bot._last_queue_request[discord_id] = current_time
-                        current_queue_size = queue_manager.get_queue_size()
-                        await message.channel.send(
-                            f"✅ 대기열에 추가되었습니다!\n"
-                            f"Discord ID: `{discord_id}`\n"
-                            f"현재 대기열: **{current_queue_size}명**\n"
-                            f"대기열이 자동으로 처리됩니다."
-                        )
-                        print(f"✅ 대기열 추가 성공: {discord_id} (현재 {current_queue_size}명)")
-                    else:
-                        await message.channel.send(
-                            f"ℹ️ 이미 대기열에 있습니다.\n"
-                            f"Discord ID: `{discord_id}`"
-                        )
-                        print(f"ℹ️ 이미 대기열에 있음: {discord_id}")
-                except Exception as queue_error:
-                    await message.channel.send(f"❌ 대기열 추가 중 오류가 발생했습니다: {queue_error}")
-                    print(f"❌ 대기열 추가 오류: {queue_error}")
-                return  # 대기열 추가 후 종료
-
-            # 허용된 봇 ID 목록 (채널 이름 변경 기능에만 적용)
-            ALLOWED_BOT_IDS = [557628352828014614, 1325579039888511056]
-
-            # 허용된 봇이 아니면 무시
-            if message.author.id not in ALLOWED_BOT_IDS:
-                return
-
-            # database_manager 로드
-            try:
-                from database_manager import db_manager
-            except ImportError:
-                await message.channel.send("데이터베이스 모듈을 로드할 수 없습니다.")
-                print("❌ database_manager 로드 실패")
-                return
-
-            # DB에서 유저 정보 조회
-            user_info = db_manager.get_user_info(discord_id)
-
-            if not user_info:
-                await message.channel.send(f"디스코드 ID `{discord_id}`에 해당하는 사용자를 찾을 수 없습니다.")
-                print(f"❌ DB에서 사용자 정보 없음: {discord_id}")
-                return
-
-            minecraft_name = user_info.get('current_minecraft_name')
-
-            if not minecraft_name:
-                await message.channel.send(f"사용자 `{discord_id}`의 마인크래프트 닉네임이 등록되지 않았습니다.")
-                print(f"❌ 마인크래프트 닉네임 없음: {discord_id}")
-                return
-
-            # 국가 정보 조회
-            nation_info = db_manager.get_current_nation(discord_id)
-
-            if not nation_info or not nation_info.get('nation_name'):
-                await message.channel.send(f"사용자 `{minecraft_name}`의 국가 정보를 찾을 수 없습니다.")
-                print(f"❌ 국가 정보 없음: {discord_id} ({minecraft_name})")
-                return
-
-            nation_name = nation_info['nation_name']
-
-            # 국가 이름을 특수 대문자로 변환 (Mathematical Bold Sans-Serif)
-            def convert_to_bold_sans_serif(text):
-                # 일반 알파벳 대문자 -> Mathematical Bold Sans-Serif
-                normal = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                bold_sans = "𝖠𝖡𝖢𝖣𝖤𝖥𝖦𝖧𝖨𝖩𝖪𝖫𝖬𝖭𝖮𝖯𝖰𝖱𝖲𝖳𝖴𝖵𝖶𝖷𝖸𝖹"
-
-                result = []
-                for char in text.upper():
-                    if char in normal:
-                        idx = normal.index(char)
-                        result.append(bold_sans[idx])
-                    else:
-                        result.append(char)
-                return ''.join(result)
-
-            nation_name_styled = convert_to_bold_sans_serif(nation_name)
-            new_channel_name = f"{nation_name_styled} 대사관"
-
-            # nationRanks, townRanks 정보 가져오기
-            nation_ranks = nation_info.get('nation_ranks', '정보 없음')
-            town_ranks = nation_info.get('town_ranks', '정보 없음')
-
-            # 현재 채널 이름 변경
-            try:
-                old_name = message.channel.name
-                await message.channel.edit(name=new_channel_name)
-
-                # 직위 정보 구성
-                rank_info = []
-                if nation_ranks and nation_ranks != '정보 없음':
-                    rank_info.append(f"국가 계급: `{nation_ranks}`")
-                if town_ranks and town_ranks != '정보 없음':
-                    rank_info.append(f"마을 계급: `{town_ranks}`")
-
-                rank_display = "\n".join(rank_info) if rank_info else "직위: `정보 없음`"
-
-                await message.channel.send(
-                    f"✅ 채널 이름이 변경되었습니다!\n"
-                    f"사용자: `{minecraft_name}` (Discord ID: `{discord_id}`)\n"
-                    f"국가: `{nation_name}`\n"
-                    f"{rank_display}\n"
-                    f"변경: `{old_name}` → `{new_channel_name}`"
-                )
-                print(f"✅ 채널 이름 변경 성공: {old_name} -> {new_channel_name} (국가 계급: {nation_ranks}, 마을 계급: {town_ranks})")
-            except discord.Forbidden:
-                await message.channel.send("❌ 채널 이름을 변경할 권한이 없습니다.")
-                print(f"❌ 채널 이름 변경 권한 없음: {message.channel.name}")
-            except Exception as e:
-                await message.channel.send(f"❌ 채널 이름 변경 중 오류가 발생했습니다: {e}")
-                print(f"❌ 채널 이름 변경 오류: {e}")
-                import traceback
-                traceback.print_exc()
-
-    except Exception as e:
-        print(f"❌ on_message 이벤트 처리 중 오류: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
         # 새로운 명령어 시스템의 메시지 핸들러 호출
+        # &MF 명령어 등은 commands/admin/MF/mf_handler.py에서 처리됨
         if hasattr(bot, 'command_loader'):
             try:
                 await bot.command_loader.handle_message(message)
             except Exception as handler_error:
                 print(f"❌ 메시지 핸들러 오류: {handler_error}")
 
+    except Exception as e:
+        print(f"❌ on_message 이벤트 처리 중 오류: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
         # 다른 명령어도 처리할 수 있도록 process_commands 호출
         await bot.process_commands(message)
 
@@ -650,8 +489,8 @@ async def main():
     """메인 실행 함수"""
     # 토큰 검증
     if not config.DISCORD_TOKEN:
-        print("❌ Discord 토큰이 설정되지 않았습니다!")
-        print("💡 .env 파일에 DISCORD_TOKEN을 설정해주세요.")
+        print("[ERROR] Discord 토큰이 설정되지 않았습니다!")
+        print("[INFO] .env 파일에 DISCORD_TOKEN을 설정해주세요.")
         return
 
     # 봇 실행
@@ -659,30 +498,70 @@ async def main():
         async with bot:
             await bot.start(config.DISCORD_TOKEN)
     except discord.LoginFailure:
-        print("❌ Discord 토큰이 잘못되었습니다!")
-        print("💡 Discord Developer Portal에서 새로운 토큰을 생성해주세요.")
+        print("[ERROR] Discord 토큰이 잘못되었습니다!")
+        print("[INFO] Discord Developer Portal에서 새로운 토큰을 생성해주세요.")
+    except asyncio.CancelledError:
+        print("[INFO] 봇 작업이 취소되었습니다.")
     except Exception as e:
-        print(f"❌ 봇 실행 중 오류: {e}")
+        print(f"[ERROR] 봇 실행 중 오류: {e}")
         import traceback
         traceback.print_exc()
     finally:
-        # 봇 종료 시 스케줄러 정리
+        # 봇 종료 시 정리
         try:
             from scheduler import stop_scheduler
             stop_scheduler()
-        except Exception as e:
-            print(f"⚠️ 스케줄러 정리 실패: {e}")
+        except Exception:
+            pass
+
+        # Bulk updater 정리
+        try:
+            from bulk_updater import bulk_data_manager
+            bulk_data_manager.stop_auto_update()
+        except Exception:
+            pass
+
+        # 봇 연결 종료
+        if not bot.is_closed():
+            await bot.close()
+
+        print("[OK] 봇 정리 완료")
+
+
+def run_bot():
+    """봇 실행 래퍼 함수"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        print("\n[STOP] Ctrl+C 감지 - 봇 종료 중...")
+    finally:
+        # 모든 태스크 정리
+        try:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+
+            # 취소된 태스크들이 완료되도록 대기
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:
+            pass
+
+        # 이벤트 루프 종료
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+
+        loop.close()
+        print("[OK] 봇이 안전하게 종료되었습니다.")
+
 
 # 메인 실행
 if __name__ == "__main__":
-    try:
-        print("🚀 Discord Bot 시작 중...")
-        config.print_config_status()
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n👋 봇이 안전하게 종료됩니다...")
-    except Exception as e:
-        print(f"❌ 치명적 오류: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    print("[START] Discord Bot 시작 중...")
+    config.print_config_status()
+    run_bot()
