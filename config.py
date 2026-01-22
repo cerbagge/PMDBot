@@ -1,22 +1,46 @@
 import os
+import shutil
 from dotenv import load_dotenv
 from typing import Optional, Union
 
 class Config:
     """환경변수를 중앙에서 관리하는 클래스"""
-    
+
     def __init__(self):
         # .env 파일 로드 (우선순위: 현재 디렉토리 > 상위 디렉토리)
+        env_loaded = False
         for env_path in ['.env', '../.env']:
             if os.path.exists(env_path):
                 load_dotenv(env_path)
                 print(f"🔧 환경변수 로드: {env_path}")
+                env_loaded = True
                 break
-        else:
-            print("⚠️ .env 파일을 찾을 수 없습니다. 시스템 환경변수를 사용합니다.")
-        
+
+        if not env_loaded:
+            # .env 파일이 없을 때 .env.example에서 자동 생성
+            env_created = self._create_env_from_example()
+            if not env_created:
+                print("⚠️ .env 파일을 찾을 수 없습니다. 시스템 환경변수를 사용합니다.")
+
         # 환경변수 로드 및 검증
         self._load_and_validate()
+
+    def _create_env_from_example(self) -> bool:
+        """
+        .env.example 파일을 복사하여 .env 파일 생성
+
+        Returns:
+            bool: 파일 생성 성공 여부
+        """
+        for example_path, target_path in [('.env.example', '.env'), ('../.env.example', '../.env')]:
+            if os.path.exists(example_path):
+                shutil.copy(example_path, target_path)
+                print("📝 .env 파일이 생성되었습니다.")
+                print("⚠️  .env 파일을 수정해주세요. (실제 값으로 변경 필요)")
+                load_dotenv(target_path)
+                return True
+
+        return False
     
     def _load_and_validate(self):
         """환경변수 로드 및 검증"""
