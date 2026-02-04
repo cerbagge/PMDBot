@@ -750,8 +750,6 @@ _is_auto_execution = False  # 스케줄러 자동 실행 여부
 
 def add_to_csv_collection(user_data: dict):
     """CSV 데이터 수집 리스트에 사용자 정보 추가 (자동 실행 시에만)"""
-    global _csv_data_collection, _is_auto_execution
-
     # 자동 실행 중일 때만 CSV 데이터 수집
     if _is_auto_execution:
         _csv_data_collection.append(user_data)
@@ -1026,7 +1024,6 @@ async def manual_execute_auto_roles(bot):
 @tasks.loop(minutes=1)
 async def queue_processor_loop_1():
     """대기열 1 처리 루프 - 1분마다 실행"""
-    global _bot_instance
     if _bot_instance is None:
         return
     try:
@@ -1046,7 +1043,6 @@ async def before_queue_processor_1():
 @tasks.loop(minutes=1)
 async def queue_processor_loop_2():
     """대기열 2 처리 루프 - 1분마다 실행"""
-    global _bot_instance
     if _bot_instance is None:
         return
     try:
@@ -1066,7 +1062,6 @@ async def before_queue_processor_2():
 @tasks.loop(minutes=1)
 async def queue_processor_loop_3():
     """대기열 3 처리 루프 - 1분마다 실행"""
-    global _bot_instance
     if _bot_instance is None:
         return
     try:
@@ -1088,8 +1083,6 @@ queue_processor_loop = queue_processor_loop_1
 @tasks.loop(hours=1)
 async def auto_roles_checker():
     """자동 역할 실행 체크 루프 - 매 시간마다 실행 시간 확인"""
-    global _bot_instance
-
     if _bot_instance is None:
         return
 

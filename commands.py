@@ -3,10 +3,12 @@ from discord import app_commands
 from discord.ext import commands
 from typing import Literal, List, Optional, Union
 import aiohttp
+import asyncio
 import os
 import json
 import time
 import datetime
+from datetime import timedelta
 from utils import format_estimated_time
 
 # 안전한 import 처리
@@ -1609,7 +1611,7 @@ class SlashCommands(commands.Cog):
                 continue  # 봇 제외
 
             # 데이터베이스에서 현재 국가 정보 조회
-            nation_info = database_manager.get_current_nation(member.id)
+            nation_info = db_manager.get_current_nation(member.id) if db_manager else None
 
             if nation_info and nation_info.get('nation_name'):
                 user_country = nation_info['nation_name']
@@ -2002,8 +2004,6 @@ class SlashCommands(commands.Cog):
                             await log_channel.send(embed=log_embed)
                 except Exception as e:
                     print(f"로그 채널 기록 실패: {e}")
-                    if LOG_ENABLED and bot_logger:
-                        bot_logger.log_error(f"로그 채널 기록 실패: {str(e)}")
         
         elif 기능 == "권한박탈":
             # 관리자 권한 체크
@@ -4113,7 +4113,7 @@ class SlashCommands(commands.Cog):
             
             if total_pages > 1:
                 # 페이지 네비게이션 버튼 추가
-                view = LogPaginationView(logs, page_size, interaction.user.id)
+                view = LogPaginationView(logs, page_size, interaction.user.id)  # noqa: F821
                 await interaction.followup.send(embed=embed, view=view, ephemeral=True)
             else:
                 await interaction.followup.send(embed=embed, ephemeral=True)
@@ -4236,7 +4236,7 @@ class SlashCommands(commands.Cog):
                     color=0xff6600
                 )
                 
-                view = LogCleanupConfirmView(days_to_keep, interaction.user.id)
+                view = LogCleanupConfirmView(days_to_keep, interaction.user.id)  # noqa: F821
                 await interaction.followup.send(embed=embed, view=view, ephemeral=True)
                 
             elif 기능 == "내보내기":
