@@ -1,15 +1,32 @@
-# log_manager.py - 디스코드 봇 로그 관리 시스템 (PostgreSQL)
+# log_manager.py - 디스코드 봇 로그 관리 시스템 (SQLite/PostgreSQL 지원)
 
 import os
 import json
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import sqlite3
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from enum import Enum
 from collections import deque
 from contextlib import contextmanager
-from db_config.database import get_log_connection_params
+from db_config.database import (
+    is_sqlite, is_postgresql, get_db_info,
+    get_sqlite_log_db_path, get_log_connection_params
+)
+
+# PostgreSQL 지원 (선택적)
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    HAS_PSYCOPG2 = True
+except ImportError:
+    HAS_PSYCOPG2 = False
+
+
+def dict_factory(cursor, row):
+    """SQLite용 딕셔너리 팩토리"""
+    fields = [column[0] for column in cursor.description]
+    return {key: value for key, value in zip(fields, row)}
+
 
 class LogLevel(Enum):
     """로그 레벨"""
@@ -19,6 +36,7 @@ class LogLevel(Enum):
     ADMIN = "ADMIN"
     AUTO = "AUTO"
     SYSTEM = "SYSTEM"
+
 
 class LogCategory(Enum):
     """로그 카테고리"""
@@ -31,14 +49,22 @@ class LogCategory(Enum):
     SYSTEM = "시스템"
     ADMIN = "관리자"
 
+
 class LogManager:
-    """로그 관리 클래스 (PostgreSQL)"""
+    """로그 관리 클래스 (SQLite/PostgreSQL 지원)"""
 
     def __init__(self):
         """
         로그 관리자 초기화
         """
-        self.conn_params = get_log_connection_params()
+        self.use_sqlite = is_sqlite()
+
+        if self.use_sqlite:
+            self.db_path = get_sqlite_log_db_path()
+        else:
+            if not HAS_PSYCOPG2:
+                raise ImportError("PostgreSQL을 사용하려면 psycopg2를 설치하세요: pip install psycopg2-binary")
+            self.conn_params = get_log_connection_params()
 
         # 메모리 내 최근 로그 (빠른 조회용)
         self.recent_logs = deque(maxlen=1000)
@@ -50,32 +76,56 @@ class LogManager:
         self._load_recent_logs()
 
         try:
-            print(f"[OK] 로그 관리자 초기화 완료 (PostgreSQL): {self.conn_params['host']}:{self.conn_params['port']}/{self.conn_params['dbname']}")
+            print(f"[OK] 로그 관리자 초기화 완료: {get_db_info()}")
         except UnicodeEncodeError:
-            print(f"[OK] Log Manager Initialized (PostgreSQL): {self.conn_params['host']}:{self.conn_params['port']}/{self.conn_params['dbname']}")
+            print(f"[OK] Log Manager Initialized")
+
+    def _get_placeholder(self) -> str:
+        """SQL 플레이스홀더 반환"""
+        return "?" if self.use_sqlite else "%s"
 
     def _init_database(self):
         """데이터베이스 및 테이블 초기화"""
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS logs (
-                        id SERIAL PRIMARY KEY,
-                        time TEXT NOT NULL,
-                        timestamp DOUBLE PRECISION NOT NULL,
-                        level TEXT NOT NULL,
-                        category TEXT NOT NULL,
-                        message TEXT NOT NULL,
-                        user_id BIGINT,
-                        user_name TEXT,
-                        target_user_id BIGINT,
-                        target_user_name TEXT,
-                        command TEXT,
-                        details TEXT,
-                        created_at TIMESTAMP DEFAULT NOW()
-                    )
-                ''')
+
+                if self.use_sqlite:
+                    cursor.execute('''
+                        CREATE TABLE IF NOT EXISTS logs (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            time TEXT NOT NULL,
+                            timestamp REAL NOT NULL,
+                            level TEXT NOT NULL,
+                            category TEXT NOT NULL,
+                            message TEXT NOT NULL,
+                            user_id INTEGER,
+                            user_name TEXT,
+                            target_user_id INTEGER,
+                            target_user_name TEXT,
+                            command TEXT,
+                            details TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    ''')
+                else:
+                    cursor.execute('''
+                        CREATE TABLE IF NOT EXISTS logs (
+                            id SERIAL PRIMARY KEY,
+                            time TEXT NOT NULL,
+                            timestamp DOUBLE PRECISION NOT NULL,
+                            level TEXT NOT NULL,
+                            category TEXT NOT NULL,
+                            message TEXT NOT NULL,
+                            user_id BIGINT,
+                            user_name TEXT,
+                            target_user_id BIGINT,
+                            target_user_name TEXT,
+                            command TEXT,
+                            details TEXT,
+                            created_at TIMESTAMP DEFAULT NOW()
+                        )
+                    ''')
 
                 # 인덱스 생성 (조회 성능 향상)
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON logs(timestamp DESC)')
@@ -95,17 +145,28 @@ class LogManager:
     @contextmanager
     def _get_db_connection(self):
         """데이터베이스 연결 컨텍스트 매니저"""
-        conn = psycopg2.connect(**self.conn_params)
+        if self.use_sqlite:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = dict_factory
+        else:
+            conn = psycopg2.connect(**self.conn_params)
         try:
             yield conn
         finally:
             conn.close()
 
+    def _get_cursor(self, conn):
+        """커서 생성 (PostgreSQL은 RealDictCursor 사용)"""
+        if self.use_sqlite:
+            return conn.cursor()
+        else:
+            return conn.cursor(cursor_factory=RealDictCursor)
+
     def _load_recent_logs(self):
         """최근 1000개 로그를 메모리에 로드"""
         try:
             with self._get_db_connection() as conn:
-                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor = self._get_cursor(conn)
                 cursor.execute('''
                     SELECT * FROM logs
                     ORDER BY timestamp DESC
@@ -125,21 +186,22 @@ class LogManager:
             except UnicodeEncodeError:
                 print(f"[ERROR] Failed to load recent logs: {e}")
 
-    def _row_to_dict(self, row: dict) -> Dict:
-        """PostgreSQL Row를 딕셔너리로 변환"""
+    def _row_to_dict(self, row) -> Dict:
+        """Row를 딕셔너리로 변환"""
+        r = dict(row) if not isinstance(row, dict) else row
         return {
-            "id": row["id"],
-            "time": row["time"],
-            "timestamp": row["timestamp"],
-            "level": row["level"],
-            "category": row["category"],
-            "message": row["message"],
-            "user_id": row["user_id"],
-            "user_name": row["user_name"],
-            "target_user_id": row["target_user_id"],
-            "target_user_name": row["target_user_name"],
-            "command": row["command"],
-            "details": json.loads(row["details"]) if row["details"] else {}
+            "id": r.get("id"),
+            "time": r.get("time"),
+            "timestamp": r.get("timestamp"),
+            "level": r.get("level"),
+            "category": r.get("category"),
+            "message": r.get("message"),
+            "user_id": r.get("user_id"),
+            "user_name": r.get("user_name"),
+            "target_user_id": r.get("target_user_id"),
+            "target_user_name": r.get("target_user_name"),
+            "command": r.get("command"),
+            "details": json.loads(r.get("details")) if r.get("details") else {}
         }
 
     def add_log(
@@ -173,6 +235,7 @@ class LogManager:
         """
         try:
             now = datetime.now()
+            ph = self._get_placeholder()
 
             log_entry = {
                 "time": now.strftime('%Y-%m-%d %H:%M:%S'),
@@ -194,11 +257,11 @@ class LogManager:
             # 데이터베이스에 저장
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
+                cursor.execute(f'''
                     INSERT INTO logs
                     (time, timestamp, level, category, message, user_id, user_name,
                      target_user_id, target_user_name, command, details)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                 ''', (
                     log_entry["time"],
                     log_entry["timestamp"],
@@ -254,24 +317,25 @@ class LogManager:
         """
         try:
             with self._get_db_connection() as conn:
-                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor = self._get_cursor(conn)
+                ph = self._get_placeholder()
 
                 # 날짜 범위 계산
                 start_time = datetime.strptime(date, '%Y-%m-%d')
                 end_time = start_time + timedelta(days=1)
 
                 if category:
-                    cursor.execute('''
+                    cursor.execute(f'''
                         SELECT * FROM logs
-                        WHERE time >= %s AND time < %s AND category = %s
+                        WHERE time >= {ph} AND time < {ph} AND category = {ph}
                         ORDER BY timestamp ASC
                     ''', (start_time.strftime('%Y-%m-%d %H:%M:%S'),
                           end_time.strftime('%Y-%m-%d %H:%M:%S'),
                           category.value))
                 else:
-                    cursor.execute('''
+                    cursor.execute(f'''
                         SELECT * FROM logs
-                        WHERE time >= %s AND time < %s
+                        WHERE time >= {ph} AND time < {ph}
                         ORDER BY timestamp ASC
                     ''', (start_time.strftime('%Y-%m-%d %H:%M:%S'),
                           end_time.strftime('%Y-%m-%d %H:%M:%S')))
@@ -299,15 +363,16 @@ class LogManager:
         """
         try:
             with self._get_db_connection() as conn:
-                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor = self._get_cursor(conn)
+                ph = self._get_placeholder()
 
                 # 날짜 범위 계산
                 start_date = datetime.now() - timedelta(days=days)
 
-                cursor.execute('''
+                cursor.execute(f'''
                     SELECT * FROM logs
-                    WHERE (user_id = %s OR target_user_id = %s)
-                    AND timestamp >= %s
+                    WHERE (user_id = {ph} OR target_user_id = {ph})
+                    AND timestamp >= {ph}
                     ORDER BY timestamp DESC
                 ''', (user_id, user_id, start_date.timestamp()))
 
@@ -339,15 +404,16 @@ class LogManager:
             os.makedirs(log_dir, exist_ok=True)
 
             with self._get_db_connection() as conn:
-                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor = self._get_cursor(conn)
+                ph = self._get_placeholder()
 
                 # 날짜 범위 계산
                 start = datetime.strptime(start_date, '%Y-%m-%d')
                 end = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
 
-                cursor.execute('''
+                cursor.execute(f'''
                     SELECT * FROM logs
-                    WHERE time >= %s AND time < %s
+                    WHERE time >= {ph} AND time < {ph}
                     ORDER BY timestamp ASC
                 ''', (start.strftime('%Y-%m-%d %H:%M:%S'),
                       end.strftime('%Y-%m-%d %H:%M:%S')))
@@ -399,21 +465,23 @@ class LogManager:
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
+                ph = self._get_placeholder()
 
                 # 날짜 계산
                 cutoff_date = datetime.now() - timedelta(days=days)
                 cutoff_timestamp = cutoff_date.timestamp()
 
                 # 삭제할 로그 수 조회
-                cursor.execute('SELECT COUNT(*) FROM logs WHERE timestamp < %s', (cutoff_timestamp,))
-                deleted_count = cursor.fetchone()[0]
+                if self.use_sqlite:
+                    cursor.execute('SELECT COUNT(*) FROM logs WHERE timestamp < ?', (cutoff_timestamp,))
+                    deleted_count = cursor.fetchone()[0]
+                    cursor.execute('DELETE FROM logs WHERE timestamp < ?', (cutoff_timestamp,))
+                else:
+                    cursor.execute('SELECT COUNT(*) FROM logs WHERE timestamp < %s', (cutoff_timestamp,))
+                    deleted_count = cursor.fetchone()[0]
+                    cursor.execute('DELETE FROM logs WHERE timestamp < %s', (cutoff_timestamp,))
 
-                # 오래된 로그 삭제
-                cursor.execute('DELETE FROM logs WHERE timestamp < %s', (cutoff_timestamp,))
                 conn.commit()
-
-                # PostgreSQL에서는 VACUUM은 별도로 실행 (autocommit 모드 필요)
-                # 여기서는 생략하고 정기적인 유지보수로 처리
 
                 if deleted_count > 0:
                     try:
@@ -475,7 +543,10 @@ class LogManager:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('SELECT COUNT(*) FROM logs')
-                return cursor.fetchone()[0]
+                result = cursor.fetchone()
+                if isinstance(result, dict):
+                    return result.get('COUNT(*)', 0)
+                return result[0] if result else 0
         except Exception as e:
             try:
                 print(f"[ERROR] 로그 개수 조회 실패: {e}")
@@ -562,6 +633,6 @@ log_manager = LogManager()
 bot_logger = BotLogger(log_manager)
 
 try:
-    print("[OK] 로그 시스템 초기화 완료 (PostgreSQL)")
+    print("[OK] 로그 시스템 초기화 완료")
 except UnicodeEncodeError:
-    print("[OK] Log System Initialized (PostgreSQL)")
+    print("[OK] Log System Initialized")

@@ -4744,7 +4744,7 @@ class SlashCommands(commands.Cog):
 
                 embed = discord.Embed(
                     title=f"💾 사용자 데이터베이스 정보",
-                    description=f"**사용자:** {member.mention if member else f'Unknown ({user['discord_id']})'}",
+                    description=f"**사용자:** {member.mention if member else 'Unknown (' + str(user['discord_id']) + ')'}",
                     color=0x00bfff
                 )
 
