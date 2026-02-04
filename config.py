@@ -84,6 +84,13 @@ class Config:
         self.REMOVE_ROLE_IF_WRONG_NATION = self._get_env_bool("REMOVE_ROLE_IF_WRONG_NATION", True)
         self.AUTO_ASSIGN_NATION_ROLES = self._get_env_bool("AUTO_ASSIGN_NATION_ROLES", False)
 
+        # 데이터베이스 설정
+        self.DB_TYPE = self._get_env("DB_TYPE", "sqlite").lower()
+        if self.DB_TYPE in ("postgresql", "postgres", "pg"):
+            self.DB_TYPE = "postgresql"
+        else:
+            self.DB_TYPE = "sqlite"
+
         # 필수 항목 검증
         self._validate_config()
     
@@ -143,6 +150,7 @@ class Config:
             ("BASE_NATION_UUID", self.BASE_NATION_UUID or "❌ 미설정 (이름으로 fallback)"),
             ("REMOVE_ROLE_IF_WRONG_NATION", self.REMOVE_ROLE_IF_WRONG_NATION),
             ("AUTO_ASSIGN_NATION_ROLES", self.AUTO_ASSIGN_NATION_ROLES),
+            ("DB_TYPE", self.DB_TYPE),
         ]
 
         for name, value in config_items:
