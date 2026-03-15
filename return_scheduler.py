@@ -249,13 +249,14 @@ async def send_inactive_dms():
 
 @tasks.loop(hours=24)
 async def send_daily_return_ping():
-    """매일 13:00 - 복귀채팅 채널에 핑 + 안내 메시지 전송"""
+    """매일 13:00 - 복귀채팅 채널에 핑 + 안내 메시지 + 복귀 신청 버튼 전송"""
     global _bot_instance
     if not _bot_instance:
         return
 
     try:
         from return_config_manager import return_config_manager
+        from commands.admin.return_system.ticket_handler import ReturnTicketView
 
         channel_id = return_config_manager.get_daily_channel()
         if not channel_id:
@@ -271,7 +272,25 @@ async def send_daily_return_ping():
         if not ping_text:
             return
 
-        await channel.send(content=ping_text)
+        today = datetime.now().strftime("%Y.%m.%d")
+
+        embed = discord.Embed(
+            title="📋 복귀 절차 안내",
+            description="잠수 상태에서 복귀를 원하시는 분들은 아래 **[복귀 신청]** 버튼을 눌러 티켓을 열어주세요.",
+            color=0x3498db
+        )
+        embed.add_field(
+            name="복귀 절차",
+            value=(
+                "1️⃣ 아래 버튼 클릭\n"
+                "2️⃣ 생성된 티켓 채널에서 복귀 의사 표현\n"
+                "3️⃣ 관리자 확인 후 `/복귀확인` 으로 복귀 완료 처리"
+            ),
+            inline=False
+        )
+        embed.set_footer(text=today)
+
+        await channel.send(content=ping_text, embed=embed, view=ReturnTicketView())
         print(f"[RETURN] 일일 복귀 핑 전송 완료: 채널 {channel.name}")
 
     except Exception as e:
