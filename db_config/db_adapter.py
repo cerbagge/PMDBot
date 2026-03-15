@@ -60,6 +60,8 @@ class PostgresAdapter(DbAdapter):
         return sql
 
     def adapt_sql(self, sql: str) -> str:
+        sql = sql.replace("{ph}", "%s")
+        sql = sql.replace("{like_op}", "ILIKE")
         return sql
 
     def add_column_safe(self, cursor, table: str, column: str, col_type: str, default=None):
@@ -102,6 +104,8 @@ class SQLiteAdapter(DbAdapter):
         return sql
 
     def adapt_sql(self, sql: str) -> str:
+        sql = sql.replace("{ph}", "%s")
+        sql = sql.replace("{like_op}", "ILIKE")
         sql = sql.replace("%s", "?")
         sql = sql.replace("NOW()", "datetime('now')")
         sql = sql.replace(" ILIKE ", " LIKE ")

@@ -58,7 +58,7 @@ async def build_newbie_list_embed(guild: discord.Guild) -> discord.Embed:
         try:
             user_info = db_manager.get_user_info(member.id)
             if user_info:
-                joined_date = user_info.get('red_mafia_joined')
+                joined_date = user_info.get('red_mafia_joined_at')
                 mc_name = user_info.get('current_minecraft_name')
         except:
             pass
@@ -81,24 +81,11 @@ async def build_newbie_list_embed(guild: discord.Guild) -> discord.Embed:
 
         # 가입일 포맷
         if joined_date:
-            days_ago = (datetime.now() - joined_date).days
-            days_left = 14 - days_ago
-            if days_ago == 0:
-                date_text = "오늘"
-            elif days_ago == 1:
-                date_text = "어제"
-            else:
-                date_text = f"{days_ago}일 전"
-
-            # 남은 일수 표시
-            if days_left > 0:
-                date_text += f" (D-{days_left})"
-            else:
-                date_text += " (만료 예정)"
+            date_text = joined_date.strftime("%Y-%m-%d")
         else:
             date_text = "?"
 
-        list_text.append(f"`{i}.` {member.mention} | `{mc_name}` | {date_text}")
+        list_text.append(f"`{i}.` {member.mention} | `{mc_name}` | `{date_text}`")
 
     # 10명씩 나눠서 필드에 추가
     chunk_size = 10
