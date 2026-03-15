@@ -204,7 +204,7 @@ def setup(bot):
                     if not mc_id:
                         async with aiohttp.ClientSession() as session:
                             url1 = f"{MC_API_BASE}/discord?discord={유저.id}"
-                            async with session.get(url1, timeout=aiohttp.ClientTimeout(total=10)) as r1:
+                            async with session.get(url1, timeout=aiohttp.ClientTimeout(total=5)) as r1:
                                 if r1.status == 200:
                                     data1 = await r1.json()
                                     if data1.get('data') and data1['data']:
@@ -239,7 +239,8 @@ def setup(bot):
                             mc_id=mc_id,
                             nation=nation_name,
                             town=town_name,
-                            callsign=텍스트
+                            callsign=텍스트,
+                            discord_joined_at=유저.joined_at
                         )
                     else:
                         # 역할 양식이 없으면 현재 닉네임에서 {CC} 찾기

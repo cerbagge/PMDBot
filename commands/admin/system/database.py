@@ -140,6 +140,8 @@ def setup(bot):
                 await interaction.response.send_message("조회할 사용자를 지정해주세요.", ephemeral=True)
                 return
 
+            await interaction.response.defer()
+
             user_info = db_manager.get_user_info(유저.id)
             name_history = db_manager.get_name_history(유저.id, limit=10)
 
@@ -149,7 +151,7 @@ def setup(bot):
                     description=f"{유저.mention}의 정보가 데이터베이스에 없습니다.",
                     color=0xff0000
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 return
 
             embed = discord.Embed(
@@ -232,12 +234,14 @@ def setup(bot):
                     inline=False
                 )
 
-            await interaction.response.send_message(embed=embed)
+            await interaction.followup.send(embed=embed)
 
         elif 기능 == "닉네임_검색":
             if not 닉네임:
                 await interaction.response.send_message("검색할 Minecraft 닉네임을 입력해주세요.", ephemeral=True)
                 return
+
+            await interaction.response.defer()
 
             results = db_manager.search_by_minecraft_name(닉네임)
 
@@ -247,7 +251,7 @@ def setup(bot):
                     description=f"`{닉네임}`와(과) 일치하는 사용자를 찾을 수 없습니다.",
                     color=0xff6600
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 return
 
             # 검색 결과가 1명인 경우 - 사용자_조회처럼 자세한 정보 표시
@@ -344,7 +348,7 @@ def setup(bot):
                     )
 
                 embed.set_footer(text=f"검색어: {닉네임}")
-                await interaction.response.send_message(embed=embed)
+                await interaction.followup.send(embed=embed)
 
             # 검색 결과가 여러 명인 경우 - 목록 형태로 표시
             else:
@@ -390,9 +394,11 @@ def setup(bot):
                 else:
                     embed.set_footer(text=f"총 {len(results)}명")
 
-                await interaction.response.send_message(embed=embed)
+                await interaction.followup.send(embed=embed)
 
         elif 기능 == "통계":
+            await interaction.response.defer()
+
             stats = db_manager.get_statistics()
 
             embed = discord.Embed(
@@ -423,7 +429,7 @@ def setup(bot):
                 )
 
             embed.timestamp = datetime.datetime.now()
-            await interaction.response.send_message(embed=embed)
+            await interaction.followup.send(embed=embed)
 
         elif 기능 == "전체_사용자":
             await interaction.response.defer()

@@ -11,6 +11,8 @@ import csv
 from queue_manager import queue_manager
 from exception_manager import exception_manager
 from utils import format_estimated_time, format_duration, format_time_until
+from newbie_config_manager import newbie_config_manager
+from commands.admin.scheduler.newbie_check import update_newbie_list_message
 
 # bulk_updater import
 try:
@@ -126,6 +128,7 @@ rate_limit_detected = False  # 429 오류 감지 상태
 rate_limit_until = None      # 제한 해제 예상 시간
 retry_counts = {}            # 사용자별 재시도 횟수 추적
 MAX_RETRY_COUNT = 3          # 최대 재시도 횟수
+bulk_failed_users = []       # Bulk 처리 실패한 사용자 ID 리스트 (3분마다 1명씩 재처리)
 
 try:
     from alliance_manager import alliance_manager, is_friendly_nation, create_nation_role_if_needed
@@ -145,9 +148,20 @@ except ImportError as e:
     nation_role_manager = None
     NATION_ROLE_ENABLED = False
 
+# travel_scheduler import (여행 시스템)
+try:
+    from travel_scheduler import is_user_traveling, get_user_travel_destination
+    print("✅ travel_scheduler 모듈 로드됨 (scheduler.py)")
+    TRAVEL_ENABLED = True
+except ImportError as e:
+    print(f"⚠️ travel_scheduler 모듈을 로드할 수 없습니다 (scheduler.py): {e}")
+    is_user_traveling = lambda x: False
+    get_user_travel_destination = lambda x: None
+    TRAVEL_ENABLED = False
+
 # update_user_info 함수 전체 (기존 함수를 완전히 대체)
 
-async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=None, town_uuid=None):
+async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=None, town_uuid=None, bot=None, joined_town_at=None):
     """
     사용자 정보 업데이트 (역할, 닉네임) - UUID 기반 국가 역할 자동 생성 및 동맹 처리
 
@@ -159,10 +173,21 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
         town: 마을 이름 (선택)
         nation_uuid: 국가 UUID (선택, 우선순위 높음)
         town_uuid: 마을 UUID (선택)
+        bot: Discord bot 인스턴스 (선택)
     """
     changes = []
 
     try:
+        # 여행 중인 사용자 체크 - 역할/닉네임 변경 건너뛰기 (마크 닉네임은 변경)
+        if TRAVEL_ENABLED and is_user_traveling(member.id):
+            travel_destination = get_user_travel_destination(member.id)
+            print(f"  ✈️ {member.display_name}님은 여행 중 (목적지: {travel_destination}) - 역할/닉네임 양식 변경 건너뛰기")
+            # 여행 중에도 마크 닉네임은 업데이트 (DB에만 저장)
+            if DATABASE_ENABLED and db_manager:
+                user_info = db_manager.get_user_info(member.id)
+                if user_info and user_info.get('minecraft_uuid'):
+                    db_manager.add_or_update_user(member.id, user_info['minecraft_uuid'], mc_id)
+            return ["✈️ 여행 중 - 역할/닉네임 양식 변경 건너뜀"]
 
         # 매핑된 마을 역할 처리 (무소속 제외)
         if TOWN_ROLE_ENABLED and town_role_manager:
@@ -233,20 +258,47 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
             base_nation = 'Red_Mafia'
             base_nation_uuid = None
 
-        # 우호 국가 확인 (UUID 우선, 이름 fallback)
+        # UUID가 없으면 캐시에서 조회 + DB 보충 저장
+        if not nation_uuid and nation and BULK_ENABLED and bulk_data_manager:
+            _info = bulk_data_manager.get_nation_by_name(nation)
+            if _info:
+                nation_uuid = _info.get('uuid')
+
+        if not town_uuid and town and BULK_ENABLED and bulk_data_manager:
+            _info = bulk_data_manager.get_town_by_name(town)
+            if _info:
+                town_uuid = _info.get('uuid')
+
+        # 캐시에서 찾은 UUID를 DB에 보충 저장 (다음 조회 시 중복 캐시 조회 방지)
+        if (nation_uuid or town_uuid) and DATABASE_ENABLED and db_manager:
+            try:
+                discord_id_for_member = getattr(member, 'id', None)
+                if discord_id_for_member:
+                    db_manager.update_user_nation_info(
+                        discord_id_for_member,
+                        nation=nation, nation_uuid=nation_uuid,
+                        town=town, town_uuid=town_uuid
+                    )
+                    db_manager.backfill_history_uuid(discord_id_for_member, nation_uuid=nation_uuid, town_uuid=town_uuid)
+            except Exception:
+                pass
+
+        # 국가 확인 (UUID 기반 - 이름은 무시)
         is_base_nation = False
         is_alliance_nation = False
 
-        if nation_uuid and base_nation_uuid:
-            # UUID 기반 비교 (우선)
+        if nation_uuid:
+            # UUID 기반 비교
             is_base_nation = (nation_uuid == base_nation_uuid)
             if ALLIANCE_ENABLED and alliance_manager:
                 is_alliance_nation = alliance_manager.is_alliance_uuid(nation_uuid)
         else:
-            # 이름 기반 비교 (fallback)
-            is_base_nation = (nation == base_nation)
+            # nation_uuid 없음 → 이름 기반 fallback
+            is_base_nation = (nation.lower() == base_nation.lower()) if (nation and base_nation) else False
             if ALLIANCE_ENABLED and alliance_manager:
-                is_alliance_nation = alliance_manager.is_alliance_name(nation)
+                is_alliance_nation = alliance_manager.is_alliance_name(nation) if nation else False
+            if is_base_nation:
+                print(f"  ⚠️ nation_uuid 없어서 이름 기반 fallback 사용: {nation} == {base_nation}")
 
         is_friendly = is_base_nation or is_alliance_nation
 
@@ -254,7 +306,7 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
         if nation_uuid:
             print(f"  🔍 UUID 기반 국가 확인: {nation} (UUID: {nation_uuid[:8]}...)")
         else:
-            print(f"  🔍 이름 기반 국가 확인: {nation} (UUID 없음)")
+            print(f"  🔍 UUID 없음, 이름 기반 확인: {nation}")
         
         if is_base_nation:
             # 기본 국가(BASE_NATION) 국민 - 조직원 역할 부여
@@ -276,6 +328,130 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
                         print(f"  ℹ️ 이미 조직원 역할 보유: {success_role.name}")
                 else:
                     print(f"  ⚠️ 조직원 역할을 찾을 수 없음 (ID: {SUCCESS_ROLE_ID})")
+
+            # 뉴비 역할 처리 (기본 국가 국민에게만)
+            # DB의 red_mafia_joined_at을 단일 진실 원천으로 사용
+            newbie_role_id = newbie_config_manager.get_newbie_role()
+            newbie_added = False
+            if newbie_role_id:
+                newbie_role = guild.get_role(newbie_role_id)
+                if newbie_role:
+                    # DB에서 기존 가입일 조회
+                    existing_joined = None
+                    if DATABASE_ENABLED and db_manager:
+                        try:
+                            existing_joined = db_manager.get_red_mafia_joined(member.id)
+                        except Exception as e:
+                            print(f"  ⚠️ 가입일 조회 실패: {e}")
+
+                    if existing_joined is not None:
+                        # === 이미 가입일이 있는 사용자 (DB 기준으로 판정) ===
+                        days_since_join = (datetime.now() - existing_joined).days
+                        if days_since_join <= 14:
+                            # 뉴비 기간 내 - 역할 없으면 자동 부여
+                            if newbie_role not in member.roles:
+                                try:
+                                    await member.add_roles(newbie_role)
+                                    changes.append(f"• **{newbie_role.name}** 역할 추가됨 (뉴비 기간 내)")
+                                    print(f"  ✅ 뉴비 역할 자동 부여 (DB 기준 {days_since_join}일): {newbie_role.name}")
+                                except Exception as e:
+                                    changes.append(f"• ⚠️ 뉴비 역할 부여 실패: {str(e)[:50]}")
+                                    print(f"  ⚠️ 뉴비 역할 부여 실패: {e}")
+                            else:
+                                print(f"  ℹ️ 이미 뉴비 역할 보유 (DB 기준 {days_since_join}일): {newbie_role.name}")
+                        else:
+                            # 뉴비 기간 만료 - 역할 있으면 제거
+                            if newbie_role in member.roles:
+                                try:
+                                    await member.remove_roles(newbie_role)
+                                    changes.append(f"• **{newbie_role.name}** 역할 제거됨 (2주 경과)")
+                                    print(f"  🚫 뉴비 역할 제거 (DB 기준 {days_since_join}일 경과): {newbie_role.name}")
+                                except Exception as e:
+                                    print(f"  ⚠️ 뉴비 역할 제거 실패: {e}")
+                            else:
+                                print(f"  ℹ️ 이미 이전 가입일 존재 ({days_since_join}일 전) - 뉴비 아님")
+                    else:
+                        # === 가입일 없는 신규 사용자 (joinedTownAt으로 판정) ===
+                        # 이전에 7일 이상 소속된 적이 있는지 확인 (복귀 멤버)
+                        is_returning_member = False
+                        if DATABASE_ENABLED and db_manager:
+                            try:
+                                is_returning_member = db_manager.was_member_of_nation(
+                                    member.id, base_nation, min_days=7
+                                )
+                                if is_returning_member:
+                                    print(f"  ℹ️ 복귀 멤버 (이전 {base_nation} 7일 이상 소속) - 뉴비 역할 제외")
+                            except Exception as e:
+                                print(f"  ⚠️ 복귀 멤버 확인 실패: {e}")
+
+                        # 뉴비 판정: API joinedTownAt + nation_history 최초 기록 중 더 오래된 날짜 기준
+                        is_newbie = False
+                        joined_at_dt = None
+
+                        if not is_returning_member:
+                            # 1. nation_history에서 이 국가에 최초로 소속된 날짜 조회
+                            oldest_history_dt = None
+                            if DATABASE_ENABLED and db_manager:
+                                try:
+                                    oldest_history_dt = db_manager.get_earliest_nation_join(member.id, base_nation)
+                                    if oldest_history_dt:
+                                        print(f"  📜 nation_history 최초 기록일: {oldest_history_dt.strftime('%Y-%m-%d')}")
+                                except Exception as e:
+                                    print(f"  ⚠️ 최초 가입일 조회 실패: {e}")
+
+                            # 2. API joinedTownAt 파싱
+                            api_joined_dt = None
+                            if joined_town_at:
+                                try:
+                                    api_joined_dt = datetime.fromtimestamp(joined_town_at / 1000)
+                                except Exception as e:
+                                    print(f"  ⚠️ joinedTownAt 파싱 실패: {e}")
+
+                            # 3. 후보 중 가장 오래된 날짜 = 실질 최초 가입일
+                            candidates = [d for d in [oldest_history_dt, api_joined_dt] if d]
+                            if candidates:
+                                joined_at_dt = min(candidates)
+                                days_since_join = (datetime.now() - joined_at_dt).days
+                                is_newbie = days_since_join <= 14
+                                print(f"  📅 실질 최초 가입일: {joined_at_dt.strftime('%Y-%m-%d')} ({days_since_join}일 전) → {'뉴비' if is_newbie else '뉴비 아님'}")
+                            else:
+                                is_newbie = True
+                                print(f"  ℹ️ 가입일 정보 없음 - 기본 뉴비 처리")
+
+                        if is_newbie:
+                            try:
+                                await member.add_roles(newbie_role)
+                                changes.append(f"• **{newbie_role.name}** 역할 추가됨")
+                                print(f"  ✅ 뉴비 역할 부여: {newbie_role.name}")
+                                newbie_added = True
+
+                                # 뉴비 가입일 기록 (joinedTownAt 또는 현재 시간)
+                                if DATABASE_ENABLED and db_manager:
+                                    try:
+                                        save_dt = joined_at_dt if joined_at_dt else datetime.now()
+                                        db_manager.set_red_mafia_joined(member.id, save_dt)
+                                        print(f"  📅 뉴비 가입일 기록: {save_dt.strftime('%Y-%m-%d %H:%M')}")
+                                    except Exception as db_err:
+                                        print(f"  ⚠️ 뉴비 가입일 기록 실패: {db_err}")
+                            except Exception as e:
+                                changes.append(f"• ⚠️ 뉴비 역할 부여 실패: {str(e)[:50]}")
+                                print(f"  ⚠️ 뉴비 역할 부여 실패: {e}")
+                        else:
+                            # 뉴비가 아닌 경우에도 가입일은 DB에 기록 (추적용)
+                            if DATABASE_ENABLED and db_manager and joined_at_dt:
+                                try:
+                                    db_manager.set_red_mafia_joined(member.id, joined_at_dt)
+                                    print(f"  📅 가입일 기록 (뉴비 아님): {joined_at_dt.strftime('%Y-%m-%d %H:%M')}")
+                                except Exception as db_err:
+                                    print(f"  ⚠️ 가입일 기록 실패: {db_err}")
+                else:
+                    print(f"  ⚠️ 뉴비 역할을 찾을 수 없음 (ID: {newbie_role_id})")
+
+            # 뉴비 알림 스레드 생성 + 목록 메시지 업데이트 (뉴비 역할이 새로 부여된 경우에만)
+            if newbie_added:
+                await send_newbie_notification(guild, member, member.id, mc_id, nation)
+                # 뉴비 목록 메시지 업데이트
+                await update_newbie_list_message(bot)
 
             # 외국인 역할 제거
             if SUCCESS_ROLE_ID_OUT != 0:
@@ -309,6 +485,9 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
         elif is_alliance_nation:
             # 동맹 국가 국민 - 외국인 역할 + 국가별 역할 부여
             print(f"  🤝 {nation} 동맹 국가 국민 확인됨")
+
+            # 뉴비 역할 제거 + 스레드 삭제 (외국인은 뉴비 아님)
+            await remove_newbie_and_thread(guild, member, mc_id, bot)
 
             # 외국인 역할(SUCCESS_ROLE_ID_OUT) 부여
             if SUCCESS_ROLE_ID_OUT != 0:
@@ -366,7 +545,10 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
                 print(f"  🌍 무소속 사용자 확인됨 - 외국인 역할 부여")
             else:
                 print(f"  🌍 외국인 확인됨: {nation}")
-            
+
+            # 뉴비 역할 제거 + 스레드 삭제 (외국인은 뉴비 아님)
+            await remove_newbie_and_thread(guild, member, mc_id, bot)
+
             # 외국인 역할 부여
             if SUCCESS_ROLE_ID_OUT != 0:
                 out_role = guild.get_role(SUCCESS_ROLE_ID_OUT)
@@ -471,7 +653,8 @@ async def update_user_info(member, mc_id, nation, guild, town=None, nation_uuid=
                 mc_id=display_mc_id,
                 nation=nation,
                 town=town,
-                callsign=user_callsign
+                callsign=user_callsign,
+                discord_joined_at=member.joined_at
             )
             print(f"  🎭 역할 양식 적용됨: {new_nickname}")
         else:
@@ -582,6 +765,16 @@ def get_scheduler_info():
                 "name": "자동 역할 실행",
                 "next_run": f"매주 {day_name} {AUTO_EXECUTION_HOUR:02d}:{AUTO_EXECUTION_MINUTE:02d}",
                 "interval": "1시간마다 체크"
+            })
+
+        # 뉴비 스레드 유지 루프 정보
+        if newbie_thread_keeper.is_running():
+            next_run = newbie_thread_keeper.next_iteration.strftime("%Y-%m-%d %H:%M:%S") if newbie_thread_keeper.next_iteration else "곧 실행"
+            jobs.append({
+                "id": "newbie_thread_keeper",
+                "name": "뉴비 스레드 유지",
+                "next_run": next_run,
+                "interval": "12시간마다"
             })
 
         # 대기열 상태 정보
@@ -748,6 +941,36 @@ def create_nickname(mc_id: str, nation: str, current_nickname: str = None, town:
 _csv_data_collection = []
 _is_auto_execution = False  # 스케줄러 자동 실행 여부
 
+# 대기열 처리 통계 (모든 큐의 결과를 누적)
+_queue_stats = {
+    'total_queued': 0,         # 대기열에 추가된 총 사용자 수
+    'bulk_processed': 0,       # Bulk 모드로 처리된 수
+    'individual_processed': 0, # 개별 모드로 처리된 수
+    'no_uuid': 0,              # UUID 없음 (후순위)
+    'no_bulk_data': 0,         # Bulk 데이터 없음 (후순위)
+    'not_in_guild': 0,         # 서버 탈퇴
+    'nation_roles_new': 0,     # 국가 역할 새로 부여
+    'nation_roles_existing': 0,# 국가 역할 이미 보유
+    'failed': 0,               # 실패
+    'bulk_mode_used': False,   # Bulk 모드 사용 여부
+}
+
+def _reset_queue_stats():
+    """대기열 처리 통계 초기화"""
+    global _queue_stats
+    _queue_stats = {
+        'total_queued': 0,
+        'bulk_processed': 0,
+        'individual_processed': 0,
+        'no_uuid': 0,
+        'no_bulk_data': 0,
+        'not_in_guild': 0,
+        'nation_roles_new': 0,
+        'nation_roles_existing': 0,
+        'failed': 0,
+        'bulk_mode_used': False,
+    }
+
 def add_to_csv_collection(user_data: dict):
     """CSV 데이터 수집 리스트에 사용자 정보 추가 (자동 실행 시에만)"""
     global _csv_data_collection, _is_auto_execution
@@ -817,6 +1040,268 @@ def save_csv_report():
         print(f"❌ CSV 저장 실패: {e}")
         return None
 
+async def remove_newbie_and_thread(guild, member, mc_name: str, bot=None):
+    """
+    외국인으로 판정된 경우 뉴비 역할 제거 및 관련 스레드 삭제
+    단, DB 기준 2주 이내인 뉴비는 역할을 유지 (오탐 방지)
+
+    Args:
+        guild: Discord 길드
+        member: Discord 멤버
+        mc_name: 마인크래프트 닉네임
+        bot: Discord 봇 (뉴비 목록 업데이트용)
+    """
+    try:
+        newbie_removed = False
+
+        # 1. 뉴비 역할 제거 (2주 체크 후)
+        newbie_role_id = newbie_config_manager.get_newbie_role()
+        if newbie_role_id:
+            newbie_role = guild.get_role(newbie_role_id)
+            if newbie_role and newbie_role in member.roles:
+                # DB에서 가입일 확인 - 2주 이내면 역할 유지 (오탐 방지)
+                should_remove = True
+                if DATABASE_ENABLED and db_manager:
+                    try:
+                        existing_joined = db_manager.get_red_mafia_joined(member.id)
+                        if existing_joined:
+                            days_since_join = (datetime.now() - existing_joined).days
+                            if days_since_join <= 14:
+                                should_remove = False
+                                print(f"  ℹ️ 뉴비 기간 내 ({days_since_join}일) - 역할 유지 (외국인 판정 무시)")
+                    except Exception as db_err:
+                        print(f"  ⚠️ 가입일 확인 실패: {db_err}")
+
+                if should_remove:
+                    try:
+                        await member.remove_roles(newbie_role)
+                        print(f"  🚫 뉴비 역할 제거됨: {newbie_role.name} (외국인 판정)")
+                        newbie_removed = True
+
+                        # DB에서 가입일 초기화 (재가입 시 새 가입일이 기록되도록)
+                        if DATABASE_ENABLED and db_manager:
+                            try:
+                                db_manager.clear_red_mafia_joined(member.id)
+                                print(f"  🗑️ 가입일 초기화됨 (외국인 판정)")
+                            except Exception as db_err:
+                                print(f"  ⚠️ 가입일 초기화 실패: {db_err}")
+                    except Exception as e:
+                        print(f"  ⚠️ 뉴비 역할 제거 실패: {e}")
+
+        # 2. 뉴비 스레드 찾아서 삭제
+        channel_id = newbie_config_manager.get_notification_channel()
+        if channel_id:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                # 스레드 이름 패턴: "🆕 {mc_name}"
+                thread_name = f"🆕 {mc_name}"
+
+                # 채널의 모든 스레드 확인
+                try:
+                    # 활성 스레드 확인
+                    for thread in channel.threads:
+                        if thread.name == thread_name or thread.name.startswith(f"🆕 {mc_name}"):
+                            try:
+                                await thread.delete()
+                                print(f"  🗑️ 뉴비 스레드 삭제됨: {thread.name} (외국인 판정)")
+                            except Exception as e:
+                                print(f"  ⚠️ 스레드 삭제 실패: {e}")
+                            break
+
+                    # 아카이브된 스레드도 확인
+                    async for thread in channel.archived_threads(limit=50):
+                        if thread.name == thread_name or thread.name.startswith(f"🆕 {mc_name}"):
+                            try:
+                                await thread.delete()
+                                print(f"  🗑️ 아카이브된 뉴비 스레드 삭제됨: {thread.name} (외국인 판정)")
+                            except Exception as e:
+                                print(f"  ⚠️ 아카이브된 스레드 삭제 실패: {e}")
+                            break
+                except Exception as e:
+                    print(f"  ⚠️ 스레드 검색 실패: {e}")
+
+        # 3. 뉴비 목록 메시지 업데이트
+        if newbie_removed and bot:
+            await update_newbie_list_message(bot)
+
+    except Exception as e:
+        print(f"  ⚠️ 뉴비 역할/스레드 제거 실패: {e}")
+
+
+async def send_newbie_notification(guild, member, discord_id: int, mc_name: str, nation: str):
+    """
+    뉴비 알림 채널에 스레드 생성 및 알림 전송
+
+    Args:
+        guild: Discord 길드
+        member: Discord 멤버
+        discord_id: 디스코드 ID
+        mc_name: 마인크래프트 닉네임
+        nation: 국가
+    """
+    try:
+        from database_manager import db_manager
+
+        # 알림 채널 확인
+        channel_id = newbie_config_manager.get_notification_channel()
+        if not channel_id:
+            print(f"  ℹ️ 뉴비 알림 채널이 설정되지 않음")
+            return
+
+        channel = guild.get_channel(channel_id)
+        if not channel:
+            print(f"  ⚠️ 뉴비 알림 채널을 찾을 수 없음: {channel_id}")
+            return
+
+        # 핑 역할 목록
+        ping_roles = newbie_config_manager.get_ping_roles()
+
+        # 사용자 정보 조회
+        user_info = None
+        name_history = []
+        nation_history = []
+        if DATABASE_ENABLED and db_manager:
+            try:
+                user_info = db_manager.get_user_info(discord_id)
+                name_history = db_manager.get_name_history(discord_id, limit=5)
+                nation_history = db_manager.get_nation_history(discord_id, limit=3)
+            except:
+                pass
+
+        # 임베드 생성
+        embed = discord.Embed(
+            title="🆕 새로운 뉴비가 Red Mafia에 가입했습니다!",
+            color=0x00ff00,
+            timestamp=datetime.now()
+        )
+
+        # 기본 정보
+        embed.add_field(
+            name="👤 디스코드",
+            value=f"{member.mention}\n`{member.name}`",
+            inline=True
+        )
+
+        embed.add_field(
+            name="🎮 마인크래프트",
+            value=f"`{mc_name}`",
+            inline=True
+        )
+
+        embed.add_field(
+            name="🏴 국가",
+            value=f"`{nation}`",
+            inline=True
+        )
+
+        # 서버 최초 가입일
+        if user_info and user_info.get('first_seen'):
+            first_seen = user_info['first_seen']
+            if hasattr(first_seen, 'strftime'):
+                embed.add_field(
+                    name="📅 서버 최초 가입일",
+                    value=first_seen.strftime("%Y-%m-%d %H:%M"),
+                    inline=True
+                )
+
+        # 이름 히스토리
+        if name_history and len(name_history) > 1:
+            history_text = "\n".join([f"• `{h.get('minecraft_name', '?')}`" for h in name_history[:5]])
+            embed.add_field(
+                name="📝 닉네임 히스토리",
+                value=history_text,
+                inline=False
+            )
+
+        # 국가 히스토리
+        if nation_history and len(nation_history) > 1:
+            nation_lines = []
+            for h in nation_history[:3]:
+                nation_val = h.get('nation_name') or '무소속'
+                town_val = h.get('town_name') or '없음'
+                nation_lines.append(f"• `{nation_val}` / `{town_val}`")
+            history_text = "\n".join(nation_lines)
+            embed.add_field(
+                name="🌍 국가 히스토리",
+                value=history_text,
+                inline=False
+            )
+
+        # 스레드 이름 생성
+        thread_name = f"🆕 {mc_name}"
+        if len(thread_name) > 100:
+            thread_name = thread_name[:100]
+
+        # 이미 같은 이름의 스레드가 있는지 확인 (중복 방지)
+        existing_thread = None
+        try:
+            # 활성 스레드에서 검색
+            for thread in channel.threads:
+                if thread.name == thread_name or thread.name.startswith(f"🆕 {mc_name}"):
+                    existing_thread = thread
+                    break
+
+            # 아카이브된 스레드에서도 검색
+            if not existing_thread:
+                async for thread in channel.archived_threads(limit=50):
+                    if thread.name == thread_name or thread.name.startswith(f"🆕 {mc_name}"):
+                        existing_thread = thread
+                        break
+        except Exception as search_error:
+            print(f"  ⚠️ 스레드 검색 중 오류: {search_error}")
+
+        # 이미 스레드가 있으면 생성하지 않음
+        if existing_thread:
+            print(f"  ℹ️ 뉴비 스레드가 이미 존재함: {existing_thread.name} - 스레드 생성 건너뜀")
+            return
+
+        try:
+            # 공개 스레드 생성
+            thread = await channel.create_thread(
+                name=thread_name,
+                type=discord.ChannelType.public_thread
+            )
+
+            # 멘션 메시지 생성
+            mentions = [member.mention]  # 뉴비 본인
+            if ping_roles:
+                for role_id in ping_roles:
+                    role = guild.get_role(role_id)
+                    if role:
+                        mentions.append(role.mention)
+
+            ping_content = " ".join(mentions) + " 님이 Red Mafia에 가입했습니다!"
+
+            # 스레드에 임베드 + 멘션 메시지 전송
+            await thread.send(content=ping_content, embed=embed)
+
+            print(f"  📢 뉴비 스레드 생성됨: {thread.name}")
+
+        except discord.Forbidden:
+            # 스레드 생성 권한이 없으면 일반 메시지로 전송
+            print(f"  ⚠️ 스레드 생성 권한 없음, 일반 메시지로 전송")
+            mentions = [member.mention]
+            if ping_roles:
+                for role_id in ping_roles:
+                    role = guild.get_role(role_id)
+                    if role:
+                        mentions.append(role.mention)
+
+            ping_content = " ".join(mentions)
+            await channel.send(content=ping_content, embed=embed)
+            print(f"  📢 뉴비 알림 전송됨: {member.name} -> #{channel.name}")
+
+        except Exception as e:
+            print(f"  ⚠️ 스레드 생성 실패: {e}")
+            # 일반 메시지로 전송
+            await channel.send(embed=embed)
+
+    except Exception as e:
+        print(f"  ❌ 뉴비 알림 전송 실패: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 async def send_log_message(bot, channel_id: int, embed: discord.Embed):
     """로그 메시지를 지정된 채널에 전송"""
     try:
@@ -865,7 +1350,9 @@ async def send_rate_limit_notification(bot):
         embed.timestamp = datetime.now()
 
         await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
-        await send_log_message(bot, SUCCESS_CHANNEL_ID, embed)
+        # 성공/실패 채널이 다른 경우에만 성공 채널에도 전송
+        if SUCCESS_CHANNEL_ID != FAILURE_CHANNEL_ID:
+            await send_log_message(bot, SUCCESS_CHANNEL_ID, embed)
 
     except Exception as e:
         print(f"❌ 속도 제한 알림 전송 실패: {e}")
@@ -874,7 +1361,8 @@ async def manual_execute_auto_roles(bot):
     """자동 역할 부여를 수동으로 실행 - 새로운 자동역할 관리자 사용"""
     try:
         print("🎯 수동 자동 역할 실행 시작")
-        
+        _reset_queue_stats()
+
         # 자동역할 관리자에서 역할 목록 가져오기
         role_ids = auto_role_manager.get_roles()
         
@@ -984,10 +1472,12 @@ async def manual_execute_auto_roles(bot):
             )
         
         embed.timestamp = datetime.now()
-        
+
         await send_log_message(bot, SUCCESS_CHANNEL_ID, embed)
-        await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
-        
+        # 성공/실패 채널이 다른 경우에만 실패 채널에도 전송
+        if FAILURE_CHANNEL_ID != SUCCESS_CHANNEL_ID:
+            await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
+
         return {
             "success": True,
             "message": f"{added_count}명이 대기열에 추가되었습니다.",
@@ -995,7 +1485,7 @@ async def manual_execute_auto_roles(bot):
             "processed_roles": len(processed_roles),
             "invalid_roles": len(invalid_roles)
         }
-        
+
     except Exception as e:
         print(f"❌ 자동 역할 실행 오류: {e}")
         
@@ -1149,6 +1639,133 @@ async def before_bulk_data_updater():
         await _bot_instance.wait_until_ready()
         print("✅ Bulk 데이터 업데이트 루프 준비 완료")
 
+@tasks.loop(minutes=3)
+async def bulk_failed_retry_loop():
+    """Bulk 처리 실패한 사용자를 3분마다 1명씩 개별 API로 재처리"""
+    global _bot_instance, bulk_failed_users
+
+    if _bot_instance is None:
+        return
+
+    if not bulk_failed_users:
+        return
+
+    # 속도 제한 상태 확인
+    if is_rate_limited():
+        print(f"⏸️ [RETRY] API 속도 제한 중 - 재처리 건너뜀")
+        return
+
+    # 1명 꺼내기
+    user_id = bulk_failed_users.pop(0)
+    remaining = len(bulk_failed_users)
+
+    try:
+        print(f"🔄 [RETRY] Bulk 실패 사용자 재처리: {user_id} (남은 대기: {remaining}명)")
+
+        async with aiohttp.ClientSession() as session:
+            result = await process_single_user(_bot_instance, session, user_id)
+
+        if result and result.get('success'):
+            print(f"✅ [RETRY] {user_id} 재처리 성공 (남은 대기: {remaining}명)")
+        else:
+            error = result.get('error', '알 수 없음') if result else '알 수 없음'
+            print(f"❌ [RETRY] {user_id} 재처리 실패: {error} (남은 대기: {remaining}명)")
+
+    except Exception as e:
+        print(f"❌ [RETRY] {user_id} 재처리 오류: {e}")
+
+    if not bulk_failed_users:
+        print("🎉 [RETRY] 모든 Bulk 실패 사용자 재처리 완료!")
+
+@bulk_failed_retry_loop.before_loop
+async def before_bulk_failed_retry_loop():
+    """Bulk 실패 재처리 루프 시작 전 봇 준비 대기"""
+    if _bot_instance:
+        await _bot_instance.wait_until_ready()
+        print("✅ Bulk 실패 재처리 루프 준비 완료 (3분마다)")
+
+@tasks.loop(hours=12)
+async def newbie_thread_keeper():
+    """아카이브된 뉴비 스레드를 자동으로 다시 열어주는 루프 (12시간마다)"""
+    global _bot_instance
+
+    if _bot_instance is None:
+        return
+
+    try:
+        from config import config
+        from database_manager import db_manager
+
+        guild = _bot_instance.get_guild(config.GUILD_ID)
+        if not guild:
+            return
+
+        # 뉴비 알림 채널 확인
+        channel_id = newbie_config_manager.get_notification_channel()
+        if not channel_id:
+            return
+
+        channel = guild.get_channel(channel_id)
+        if not channel:
+            return
+
+        # 뉴비 역할 확인
+        newbie_role_id = newbie_config_manager.get_newbie_role()
+        if not newbie_role_id:
+            return
+
+        newbie_role = guild.get_role(newbie_role_id)
+        if not newbie_role:
+            return
+
+        # 현재 뉴비 멤버들의 MC 닉네임 수집
+        newbie_mc_names = set()
+        for member in newbie_role.members:
+            try:
+                user_info = db_manager.get_user_info(member.id)
+                if user_info and user_info.get('current_minecraft_name'):
+                    newbie_mc_names.add(user_info['current_minecraft_name'])
+            except:
+                pass
+
+        if not newbie_mc_names:
+            return
+
+        # 아카이브된 뉴비 스레드 찾아서 다시 열기
+        unarchived_count = 0
+        try:
+            async for thread in channel.archived_threads(limit=100):
+                if not thread.name.startswith("🆕 "):
+                    continue
+
+                # 스레드 이름에서 MC 닉네임 추출
+                mc_name = thread.name[2:].strip()  # "🆕 " 제거
+
+                # 현재 뉴비인 경우에만 다시 열기
+                if mc_name in newbie_mc_names:
+                    try:
+                        await thread.edit(archived=False)
+                        unarchived_count += 1
+                        print(f"  🔓 뉴비 스레드 다시 열림: {thread.name}")
+                        await asyncio.sleep(1)  # 레이트 리밋 방지
+                    except Exception as e:
+                        print(f"  ⚠️ 스레드 다시 열기 실패 ({thread.name}): {e}")
+        except Exception as e:
+            print(f"  ⚠️ 아카이브된 스레드 검색 실패: {e}")
+
+        if unarchived_count > 0:
+            print(f"[THREAD] 아카이브된 뉴비 스레드 {unarchived_count}개 다시 열림")
+
+    except Exception as e:
+        print(f"❌ 뉴비 스레드 유지 루프 오류: {e}")
+
+@newbie_thread_keeper.before_loop
+async def before_newbie_thread_keeper():
+    """뉴비 스레드 유지 루프 시작 전 봇 준비 대기"""
+    if _bot_instance:
+        await _bot_instance.wait_until_ready()
+        print("✅ 뉴비 스레드 유지 루프 준비 완료")
+
 def start_scheduler(bot):
     """스케줄러 시작 - discord.ext.tasks 사용"""
     global _bot_instance
@@ -1185,6 +1802,16 @@ def start_scheduler(bot):
         if BULK_ENABLED and not bulk_data_updater.is_running():
             bulk_data_updater.start()
             print(f"   ✅ Bulk 데이터 업데이트 루프 시작 (5분마다)")
+
+        # 뉴비 스레드 유지 루프 시작
+        if not newbie_thread_keeper.is_running():
+            newbie_thread_keeper.start()
+            print(f"   ✅ 뉴비 스레드 유지 루프 시작 (12시간마다)")
+
+        # Bulk 실패 재처리 루프 시작
+        if not bulk_failed_retry_loop.is_running():
+            bulk_failed_retry_loop.start()
+            print(f"   ✅ Bulk 실패 재처리 루프 시작 (3분마다 1명씩)")
 
         print("✅ 백그라운드 태스크 시작 완료 (3개 병렬 대기열 활성화)")
 
@@ -1230,6 +1857,14 @@ def stop_scheduler():
             bulk_data_updater.cancel()
             print("   ✅ Bulk 데이터 업데이트 루프 중지")
 
+        if newbie_thread_keeper.is_running():
+            newbie_thread_keeper.cancel()
+            print("   ✅ 뉴비 스레드 유지 루프 중지")
+
+        if bulk_failed_retry_loop.is_running():
+            bulk_failed_retry_loop.cancel()
+            print("   ✅ Bulk 실패 재처리 루프 중지")
+
         print("✅ 백그라운드 태스크 중지 완료")
 
         # 대기열 초기화
@@ -1238,8 +1873,409 @@ def stop_scheduler():
     except Exception as e:
         print(f"❌ 백그라운드 태스크 중지 실패: {e}")
 
+async def process_users_bulk(bot, queue_index: int = 0):
+    """
+    대기열 20명 이상일 때 Bulk 데이터를 활용하여 일괄 처리
+    - 1순위: 국가 역할 지급 (nation UUID 조회)
+    - 2순위: 나머지 처리 (닉네임, 마을 역할, 뉴비 등)
+    - UUID 없는 사용자는 대기열 뒤에 재추가
+    """
+    try:
+        from config import config
+
+        guild = bot.get_guild(config.GUILD_ID) if config.GUILD_ID else None
+        if not guild:
+            print("[BULK] Discord 서버를 찾을 수 없습니다")
+            return
+
+        # 모든 대기열에서 사용자 꺼내기
+        all_users = queue_manager.get_all_and_clear(queue_index)
+        if not all_users:
+            return
+
+        print(f"\n{'='*60}")
+        print(f"⚡ [Q{queue_index+1}] BULK 모드 처리 시작 ({len(all_users)}명)")
+        print(f"{'='*60}")
+
+        # Bulk 데이터 최신화 (캐시가 오래되었으면 갱신)
+        if BULK_ENABLED and bulk_data_manager:
+            data_age = bulk_data_manager.get_data_age()
+            if not data_age or data_age.total_seconds() > 300:  # 5분 이상 경과
+                print("[BULK] Bulk 데이터 갱신 중...")
+                await asyncio.to_thread(bulk_data_manager.fetch_all_bulk_data, force=True)
+                print(f"[BULK] Bulk 데이터 갱신 완료: 주민 {len(bulk_data_manager.bulk_data)}명")
+        else:
+            print("[BULK] Bulk 데이터 매니저가 비활성화됨 - 개별 처리로 전환")
+            # bulk 불가능하면 다시 대기열에 넣고 기존 방식으로 처리
+            for uid in all_users:
+                queue_manager.add_user(uid)
+            return
+
+        # DB에서 UUID 조회하여 분류
+        uuid_users = []   # (user_id, uuid, db_data) - UUID 있는 사용자
+        no_uuid_users = []  # UUID 없는 사용자
+
+        for user_id in all_users:
+            try:
+                user_data = db_manager.get_user_info(user_id) if DATABASE_ENABLED and db_manager else None
+                if user_data and user_data.get('minecraft_uuid'):
+                    uuid_users.append((user_id, user_data['minecraft_uuid'], user_data))
+                else:
+                    no_uuid_users.append(user_id)
+            except Exception:
+                no_uuid_users.append(user_id)
+
+        # UUID 없는 사용자는 대기열 맨 뒤에 재추가 (나중에 개별 처리)
+        for uid in no_uuid_users:
+            queue_manager.add_user_back(uid)
+
+        print(f"  📊 [BULK] UUID 보유: {len(uuid_users)}명, UUID 없음(후순위): {len(no_uuid_users)}명")
+
+        if not uuid_users:
+            print("[BULK] UUID 보유 사용자가 없어 bulk 처리 종료")
+            return
+
+        # ===== Bulk 데이터 + 길드 멤버 사전 검증 =====
+        # Bulk 데이터가 없거나 서버에 없는 사용자를 미리 분류
+        bulk_ready_users = []    # bulk 처리 가능한 사용자
+        not_in_guild = 0         # 서버에 없는 사용자 (탈퇴)
+        no_bulk_data_users = []  # bulk 데이터에 없는 사용자 (개별 처리 필요)
+
+        for user_id, uuid, db_data in uuid_users:
+            member = guild.get_member(user_id)
+            if not member:
+                not_in_guild += 1
+                continue  # 서버를 떠난 사용자 - 재추가 불필요
+
+            resident_data = bulk_data_manager.get_resident_by_uuid(uuid)
+            if not resident_data:
+                no_bulk_data_users.append(user_id)
+                continue
+
+            bulk_ready_users.append((user_id, uuid, db_data))
+
+        # Bulk 데이터 없는 사용자는 대기열 뒤에 재추가 (개별 API로 처리)
+        for uid in no_bulk_data_users:
+            queue_manager.add_user_back(uid)
+
+        if not_in_guild > 0:
+            print(f"  ⚠️ [BULK] 서버 미존재 (탈퇴): {not_in_guild}명 건너뜀")
+        if no_bulk_data_users:
+            print(f"  ⚠️ [BULK] Bulk 데이터 없음 → 개별 처리로 전환: {len(no_bulk_data_users)}명")
+
+        print(f"  ✅ [BULK] Bulk 처리 대상: {len(bulk_ready_users)}명")
+
+        if not bulk_ready_users:
+            print("[BULK] Bulk 처리 가능한 사용자가 없어 종료")
+            return
+
+        # ===== 1순위: 국가 역할 지급 =====
+        print(f"\n  🏛️ [BULK] 1순위: 국가 역할 처리 시작")
+        nation_stats = await _bulk_assign_nation_roles(bot, guild, bulk_ready_users) or {}
+
+        # ===== 2순위: 나머지 처리 (닉네임, 뉴비 등) =====
+        print(f"\n  📝 [BULK] 2순위: 나머지 처리 시작 (닉네임, 뉴비 등)")
+        remaining_stats = await _bulk_process_remaining(bot, guild, bulk_ready_users) or {}
+
+        # 통계 누적
+        global _queue_stats, bulk_failed_users
+        _queue_stats['total_queued'] += len(all_users)
+        _queue_stats['bulk_processed'] += remaining_stats.get('processed', 0)
+        _queue_stats['no_uuid'] += len(no_uuid_users)
+        _queue_stats['no_bulk_data'] += len(no_bulk_data_users)
+        _queue_stats['not_in_guild'] += not_in_guild
+        _queue_stats['nation_roles_new'] += nation_stats.get('new', 0)
+        _queue_stats['nation_roles_existing'] += nation_stats.get('existing', 0)
+        _queue_stats['failed'] += remaining_stats.get('failed', 0) + nation_stats.get('failed', 0)
+        _queue_stats['bulk_mode_used'] = True
+
+        # 실패한 사용자를 재처리 대기열에 추가 (3분마다 1명씩 개별 API로 처리)
+        nation_failed = nation_stats.get('failed_user_ids', [])
+        remaining_failed = remaining_stats.get('failed_user_ids', [])
+        all_failed = list(set(nation_failed + remaining_failed))  # 중복 제거
+        if all_failed:
+            # 기존 bulk_failed_users에 없는 사용자만 추가
+            existing_ids = set(bulk_failed_users)
+            new_failed = [uid for uid in all_failed if uid not in existing_ids]
+            bulk_failed_users.extend(new_failed)
+            print(f"  🔄 [BULK] 실패한 {len(new_failed)}명을 재처리 대기열에 추가 (3분마다 1명씩 개별 처리)")
+
+        print(f"\n{'='*60}")
+        print(f"✅ [Q{queue_index+1}] BULK 모드 처리 완료: {len(bulk_ready_users)}명 처리, {len(no_uuid_users)}명 UUID없음(후순위), {len(no_bulk_data_users)}명 Bulk없음(후순위), {not_in_guild}명 탈퇴")
+        print(f"{'='*60}\n")
+
+    except Exception as e:
+        print(f"[ERROR] Bulk 모드 처리 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        # 실패 시 사용자들을 다시 대기열에 추가
+        for uid in all_users:
+            queue_manager.add_user(uid)
+
+
+async def _bulk_assign_nation_roles(bot, guild, uuid_users: list):
+    """
+    Bulk 데이터를 사용하여 국가 역할을 1순위로 지급
+    - bulk_data에서 nation 조회
+    - nation_data에서 nation UUID 조회
+    - create_nation_role_if_needed()로 역할 생성/부여
+    """
+    try:
+        from config import config
+
+        base_nation = config.BASE_NATION
+        base_nation_uuid = getattr(config, 'BASE_NATION_UUID', None)
+
+        if not ALLIANCE_ENABLED:
+            print(f"  ⚠️ [BULK] ALLIANCE_ENABLED=False - 국가 역할 자동 부여 비활성화됨")
+            return
+
+        processed = 0
+        already_has = 0
+        no_nation = 0
+        failed = 0
+        failed_user_ids = []  # 실패한 사용자 ID 추적
+
+        for user_id, uuid, db_data in uuid_users:
+            try:
+                member = guild.get_member(user_id)
+                if not member:
+                    continue
+
+                # 여행 중인 사용자는 역할 변경 건너뛰기
+                if TRAVEL_ENABLED and is_user_traveling(user_id):
+                    continue
+
+                # Bulk 데이터에서 국가 정보 조회 (사전 검증됨)
+                resident_data = bulk_data_manager.get_resident_by_uuid(uuid)
+                if not resident_data:
+                    continue
+
+                nation = resident_data.get('nation') or None
+
+                if not nation:
+                    no_nation += 1
+                    continue
+
+                # nation UUID 조회 (캐시에서)
+                nation_uuid = None
+                nation_info = bulk_data_manager.get_nation_by_name(nation)
+                if nation_info:
+                    nation_uuid = nation_info.get('uuid')
+
+                # 이전 국가 역할 제거 (nation_role_manager 사용)
+                if NATION_ROLE_ENABLED and nation_role_manager:
+                    all_nation_mappings = nation_role_manager.get_all_nation_roles()
+                    for mapped_nation, role_data in all_nation_mappings.items():
+                        if mapped_nation != nation:
+                            old_role = guild.get_role(role_data['role_id'])
+                            if old_role and old_role in member.roles:
+                                await member.remove_roles(old_role)
+                                print(f"    🔄 {member.name}: {mapped_nation} 국가 역할 제거")
+
+                # 국가 역할 생성/부여
+                nation_role = await create_nation_role_if_needed(guild, nation)
+                if nation_role and nation_role not in member.roles:
+                    await member.add_roles(nation_role)
+                    print(f"    ✅ {member.name}: {nation} 국가 역할 부여")
+                    processed += 1
+                elif nation_role:
+                    already_has += 1  # 이미 보유
+                else:
+                    print(f"    ⚠️ {member.name}: {nation} 국가 역할 생성/조회 실패 (None 반환)")
+                    failed += 1
+                    failed_user_ids.append(user_id)
+
+                # UUID를 DB에 보충 저장
+                if DATABASE_ENABLED and db_manager and nation_uuid:
+                    db_manager.update_user_nation_info(
+                        user_id, nation=nation, nation_uuid=nation_uuid,
+                        town=resident_data.get('town'),
+                        town_uuid=None
+                    )
+
+                await asyncio.sleep(0.3)  # 레이트 리밋 방지
+
+            except Exception as e:
+                print(f"    ❌ {user_id} 국가 역할 처리 실패: {e}")
+                failed += 1
+                failed_user_ids.append(user_id)
+
+        print(f"  🏛️ [BULK] 국가 역할 처리 완료: 새로부여 {processed}건, 이미보유 {already_has}건, 무소속 {no_nation}건, 실패 {failed}건")
+        return {'new': processed, 'existing': already_has, 'no_nation': no_nation, 'failed': failed, 'failed_user_ids': failed_user_ids}
+
+    except Exception as e:
+        print(f"[ERROR] Bulk 국가 역할 처리 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        return {'new': 0, 'existing': 0, 'no_nation': 0, 'failed': 0, 'failed_user_ids': []}
+
+
+async def _bulk_process_remaining(bot, guild, uuid_users: list):
+    """
+    Bulk 데이터를 사용하여 나머지 처리 (닉네임, 조직원/외국인 역할, 뉴비 등)
+    - base nation 소속 사용자는 개별 API로 joinedTownAt 조회
+    """
+    try:
+        from config import config
+
+        base_nation = config.BASE_NATION
+        base_nation_uuid = getattr(config, 'BASE_NATION_UUID', None)
+
+        try:
+            from callsign_manager import callsign_manager as cs_manager
+        except ImportError:
+            cs_manager = None
+
+        processed = 0
+        failed = 0
+        failed_user_ids = []  # 실패한 사용자 ID 추적
+
+        async with aiohttp.ClientSession() as session:
+            for user_id, uuid, db_data in uuid_users:
+                try:
+                    member = guild.get_member(user_id)
+                    if not member:
+                        continue
+
+                    # 여행 중인 사용자는 건너뛰기
+                    if TRAVEL_ENABLED and is_user_traveling(user_id):
+                        continue
+
+                    # Bulk 데이터에서 정보 조회
+                    resident_data = bulk_data_manager.get_resident_by_uuid(uuid)
+                    if not resident_data:
+                        continue
+
+                    mc_name = resident_data.get('name')
+                    nation = resident_data.get('nation') or None
+                    town = resident_data.get('town') or None
+                    nation_ranks = resident_data.get('nationRanks') or None
+                    town_ranks = resident_data.get('townRanks') or None
+
+                    if not mc_name:
+                        continue
+
+                    # nation UUID 조회
+                    nation_uuid = None
+                    if nation:
+                        nation_info = bulk_data_manager.get_nation_by_name(nation)
+                        if nation_info:
+                            nation_uuid = nation_info.get('uuid')
+
+                    # town UUID 조회
+                    town_uuid = None
+                    if town:
+                        town_info = bulk_data_manager.get_town_by_name(town)
+                        if town_info:
+                            town_uuid = town_info.get('uuid')
+
+                    # base nation 소속 확인
+                    if nation_uuid:
+                        is_in_base_nation = (nation_uuid == base_nation_uuid)
+                    else:
+                        is_in_base_nation = (nation.lower() == base_nation.lower()) if (nation and base_nation) else False
+
+                    # joinedTownAt 조회 (bulk 데이터에서 직접 가져옴)
+                    joined_town_at = resident_data.get('joinedTownAt')
+                    if joined_town_at == 0:
+                        joined_town_at = None
+
+                    # update_user_info() 호출 (기존 로직 활용)
+                    role_changes = await update_user_info(
+                        member, mc_name, nation or "❌", guild, town,
+                        nation_uuid=nation_uuid, town_uuid=town_uuid, bot=bot,
+                        joined_town_at=joined_town_at
+                    )
+
+                    # DB 업데이트
+                    if DATABASE_ENABLED and db_manager:
+                        db_manager.add_or_update_user(user_id, uuid, mc_name)
+                        db_manager.add_nation_history(
+                            discord_id=user_id,
+                            nation_name=nation,
+                            nation_uuid=nation_uuid,
+                            town_name=town,
+                            town_uuid=town_uuid,
+                            nation_ranks=nation_ranks,
+                            town_ranks=town_ranks
+                        )
+                        db_manager.update_user_nation_info(
+                            user_id, nation=nation, nation_uuid=nation_uuid,
+                            town=town, town_uuid=town_uuid
+                        )
+
+                    processed += 1
+
+                    # 성공 로그 전송
+                    last_online = resident_data.get('lastOnline')
+                    days_offline = "정보 없음"
+                    if last_online:
+                        try:
+                            last_online_dt = datetime.fromtimestamp(last_online / 1000)
+                            days_diff = (datetime.now() - last_online_dt).days
+                            days_offline = "오늘" if days_diff == 0 else f"{days_diff}일 전"
+                        except Exception:
+                            pass
+
+                    embed = discord.Embed(
+                        title="✅ 사용자 처리 완료 (Bulk)",
+                        description=f"**Discord:** {member.mention}\n**MC:** {mc_name}",
+                        color=0x00ff00
+                    )
+                    embed.add_field(name="🏛️ 국가", value=nation or "무소속", inline=True)
+                    embed.add_field(name="🏘️ 마을", value=town or "없음", inline=True)
+                    embed.add_field(name="🕒 마지막 접속", value=days_offline, inline=True)
+                    if role_changes:
+                        embed.add_field(name="🔧 변경사항", value="\n".join(role_changes[:5]), inline=False)
+                    embed.timestamp = datetime.now()
+
+                    await send_log_message(bot, SUCCESS_CHANNEL_ID, embed)
+
+                    await asyncio.sleep(0.5)  # 레이트 리밋 방지
+
+                except Exception as e:
+                    print(f"    ❌ {user_id} 나머지 처리 실패: {e}")
+                    failed += 1
+                    failed_user_ids.append(user_id)
+
+        print(f"  📝 [BULK] 나머지 처리 완료: 성공 {processed}건, 실패 {failed}건")
+        return {'processed': processed, 'failed': failed, 'failed_user_ids': failed_user_ids}
+
+    except Exception as e:
+        print(f"[ERROR] Bulk 나머지 처리 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        return {'processed': 0, 'failed': 0, 'failed_user_ids': []}
+
+
+async def _fetch_joined_town_at(session, uuid: str) -> int:
+    """
+    개별 resident API에서 joinedTownAt 밀리초 타임스탬프를 조회
+
+    Args:
+        session: aiohttp 세션
+        uuid: Minecraft UUID
+
+    Returns:
+        joinedTownAt 밀리초 타임스탬프 (없으면 None)
+    """
+    try:
+        url = f"{MC_API_BASE}/resident?uuid={uuid}"
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data.get('data') and len(data['data']) > 0:
+                    return data['data'][0].get('joinedTownAt')
+            elif response.status == 429:
+                print(f"    ⚠️ joinedTownAt API 429 - UUID: {uuid[:8]}...")
+    except Exception as e:
+        print(f"    ⚠️ joinedTownAt 조회 실패 (UUID: {uuid[:8]}...): {e}")
+    return None
+
+
 async def process_queue_batch(bot, queue_index: int = 0):
-    """특정 대기열에서 사용자들을 배치로 처리 - 429 오류 처리 추가"""
+    """특정 대기열에서 사용자들을 배치로 처리 - 429 오류 처리 추가, 20명 이상 시 Bulk 모드"""
     try:
         # 속도 제한 상태 확인
         if is_rate_limited():
@@ -1257,6 +2293,23 @@ async def process_queue_batch(bot, queue_index: int = 0):
         if queue_size_before == 0:
             return
 
+        # === 20명 이상이면 Bulk 모드로 전환 ===
+        total_queue_size = queue_manager.get_queue_size()  # 전체 대기열 크기
+        if total_queue_size >= 20 and BULK_ENABLED and bulk_data_manager and bulk_data_manager.is_data_available():
+            print(f"⚡ [Q{queue_index+1}] 전체 대기열 {total_queue_size}명 >= 20명 → BULK 모드 전환")
+            queue_manager.set_processing(queue_index, True)
+            try:
+                await process_users_bulk(bot, queue_index)
+            finally:
+                queue_manager.set_processing(queue_index, False)
+
+            # Bulk 처리 후 대기열 완료 체크
+            queue_size_after = queue_manager.get_queue_size()
+            if queue_size_after == 0 and queue_size_before > 0:
+                await _send_queue_complete_message(bot, queue_size_before)
+            return
+
+        # === 기존 방식: 20명 미만 개별 처리 ===
         print(f"🔄 [Q{queue_index+1}] 대기열 배치 처리 시작 (대기: {queue_size_before}명)")
         queue_manager.set_processing(queue_index, True)
 
@@ -1329,76 +2382,130 @@ async def process_queue_batch(bot, queue_index: int = 0):
 
         print(f"✅ [Q{queue_index+1}] 배치 처리 완료: DB UUID 보유 {len(db_users)}명, UUID 없음 {len(new_users)}명")
 
+        # 개별 처리 통계 누적
+        global _queue_stats
+        _queue_stats['total_queued'] += len(processed_users)
+        _queue_stats['individual_processed'] += len(processed_users)
+
         # 처리 후 대기열이 비었는지 확인하고 완료 메시지 전송
         queue_size_after = queue_manager.get_queue_size()
 
-        # 대기열이 비어있고, 처리 전에는 비어있지 않았다면 완료 메시지 전송
         if queue_size_after == 0 and queue_size_before > 0:
-            print("🎉 모든 대기열 처리 완료!")
-
-            # CSV 보고서 저장 (자동 실행 시에만 데이터가 수집되었을 것임)
-            csv_filepath = save_csv_report()
-
-            # 자동 실행 플래그 해제 (모든 처리 완료)
-            global _is_auto_execution
-            if _is_auto_execution:
-                _is_auto_execution = False
-                print("📋 CSV 데이터 수집 비활성화됨 (대기열 처리 완료)")
-
-            # 완료 메시지 임베드 생성
-            embed = discord.Embed(
-                title="✅ 자동 실행 완료",
-                description="모든 대기열 처리가 완료되었습니다.",
-                color=0x00ff00
-            )
-
-            embed.add_field(
-                name="📊 처리 결과",
-                value="대기열에 있던 모든 사용자의 처리가 완료되었습니다.",
-                inline=False
-            )
-
-            if csv_filepath:
-                csv_filename = os.path.basename(csv_filepath)
-                embed.add_field(
-                    name="📄 CSV 보고서",
-                    value=f"파일명: `{csv_filename}`\n자동 실행 결과가 CSV 파일로 저장되었습니다.",
-                    inline=False
-                )
-
-            embed.timestamp = datetime.now()
-
-            # 성공 채널과 실패 채널 모두에 전송 (CSV 파일 첨부)
-            try:
-                if SUCCESS_CHANNEL_ID and SUCCESS_CHANNEL_ID != 0:
-                    success_channel = bot.get_channel(SUCCESS_CHANNEL_ID)
-                    if success_channel:
-                        if csv_filepath and os.path.exists(csv_filepath):
-                            with open(csv_filepath, 'rb') as f:
-                                discord_file = discord.File(f, filename=os.path.basename(csv_filepath))
-                                await success_channel.send(embed=embed, file=discord_file)
-                        else:
-                            await success_channel.send(embed=embed)
-            except Exception as e:
-                print(f"⚠️ 성공 채널 전송 실패: {e}")
-
-            try:
-                if FAILURE_CHANNEL_ID and FAILURE_CHANNEL_ID != 0:
-                    failure_channel = bot.get_channel(FAILURE_CHANNEL_ID)
-                    if failure_channel:
-                        if csv_filepath and os.path.exists(csv_filepath):
-                            with open(csv_filepath, 'rb') as f:
-                                discord_file = discord.File(f, filename=os.path.basename(csv_filepath))
-                                await failure_channel.send(embed=embed, file=discord_file)
-                        else:
-                            await failure_channel.send(embed=embed)
-            except Exception as e:
-                print(f"⚠️ 실패 채널 전송 실패: {e}")
+            await _send_queue_complete_message(bot, queue_size_before)
 
     except Exception as e:
         print(f"❌ [Q{queue_index+1}] 배치 처리 오류: {e}")
     finally:
         queue_manager.set_processing(queue_index, False)
+
+
+async def _send_queue_complete_message(bot, queue_size_before: int):
+    """대기열 처리 완료 메시지 전송 (총합 통계 포함)"""
+    global _queue_stats, _is_auto_execution
+    print("🎉 모든 대기열 처리 완료!")
+
+    # CSV 보고서 저장
+    csv_filepath = save_csv_report()
+
+    # 자동 실행 플래그 해제
+    if _is_auto_execution:
+        _is_auto_execution = False
+        print("📋 CSV 데이터 수집 비활성화됨 (대기열 처리 완료)")
+
+    stats = _queue_stats
+
+    embed = discord.Embed(
+        title="✅ 자동 실행 완료",
+        description="모든 대기열 처리가 완료되었습니다.",
+        color=0x00ff00
+    )
+
+    # 총합 처리 결과
+    total_processed = stats['bulk_processed'] + stats['individual_processed']
+    mode_text = "Bulk + 개별" if stats['bulk_mode_used'] and stats['individual_processed'] > 0 else ("Bulk" if stats['bulk_mode_used'] else "개별")
+
+    summary_lines = [
+        f"**총 대기열:** {stats['total_queued']}명",
+        f"**처리 완료:** {total_processed}명 ({mode_text} 모드)",
+    ]
+    if stats['bulk_processed'] > 0:
+        summary_lines.append(f"  - Bulk 처리: {stats['bulk_processed']}명")
+    if stats['individual_processed'] > 0:
+        summary_lines.append(f"  - 개별 처리: {stats['individual_processed']}명")
+    if stats['failed'] > 0:
+        summary_lines.append(f"**실패:** {stats['failed']}건")
+    embed.add_field(
+        name="📊 처리 결과",
+        value="\n".join(summary_lines),
+        inline=False
+    )
+
+    # 국가 역할 통계 (Bulk 모드에서만)
+    if stats['bulk_mode_used'] and (stats['nation_roles_new'] > 0 or stats['nation_roles_existing'] > 0):
+        nation_lines = [
+            f"**새로 부여:** {stats['nation_roles_new']}건",
+            f"**이미 보유:** {stats['nation_roles_existing']}건",
+        ]
+        embed.add_field(
+            name="🏛️ 국가 역할",
+            value="\n".join(nation_lines),
+            inline=True
+        )
+
+    # 건너뛴 사용자 통계
+    skipped_lines = []
+    if stats['no_uuid'] > 0:
+        skipped_lines.append(f"UUID 없음 (후순위): {stats['no_uuid']}명")
+    if stats['no_bulk_data'] > 0:
+        skipped_lines.append(f"Bulk 데이터 없음 (후순위): {stats['no_bulk_data']}명")
+    if stats['not_in_guild'] > 0:
+        skipped_lines.append(f"서버 탈퇴: {stats['not_in_guild']}명")
+    if skipped_lines:
+        embed.add_field(
+            name="⚠️ 건너뜀",
+            value="\n".join(skipped_lines),
+            inline=True
+        )
+
+    if csv_filepath:
+        csv_filename = os.path.basename(csv_filepath)
+        embed.add_field(
+            name="📄 CSV 보고서",
+            value=f"파일명: `{csv_filename}`",
+            inline=False
+        )
+    embed.timestamp = datetime.now()
+
+    # 통계 초기화
+    _reset_queue_stats()
+
+    try:
+        if SUCCESS_CHANNEL_ID and SUCCESS_CHANNEL_ID != 0:
+            success_channel = bot.get_channel(SUCCESS_CHANNEL_ID)
+            if success_channel:
+                if csv_filepath and os.path.exists(csv_filepath):
+                    with open(csv_filepath, 'rb') as f:
+                        discord_file = discord.File(f, filename=os.path.basename(csv_filepath))
+                        await success_channel.send(embed=embed, file=discord_file)
+                else:
+                    await success_channel.send(embed=embed)
+    except Exception as e:
+        print(f"⚠️ 성공 채널 전송 실패: {e}")
+
+    if FAILURE_CHANNEL_ID != SUCCESS_CHANNEL_ID:
+        try:
+            if FAILURE_CHANNEL_ID and FAILURE_CHANNEL_ID != 0:
+                failure_channel = bot.get_channel(FAILURE_CHANNEL_ID)
+                if failure_channel:
+                    if csv_filepath and os.path.exists(csv_filepath):
+                        with open(csv_filepath, 'rb') as f:
+                            discord_file = discord.File(f, filename=os.path.basename(csv_filepath))
+                            await failure_channel.send(embed=embed, file=discord_file)
+                    else:
+                        await failure_channel.send(embed=embed)
+        except Exception as e:
+            print(f"⚠️ 실패 채널 전송 실패: {e}")
+
 
 async def process_single_user(bot, session, user_id):
     """단일 사용자 처리 - 429 오류 처리 및 재대기열 추가, 마지막 온라인 정보 포함"""
@@ -1450,7 +2557,8 @@ async def process_single_user(bot, session, user_id):
             await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
             return {'success': False, 'error': error_message}
 
-        # 데이터베이스에서 UUID 먼저 확인
+        # 항상 Discord ID API로 최신 연동 계정 확인 (마크 계정 변경 대응)
+        # DB 캐시는 API 실패 시 폴백으로만 사용
         cached_uuid = None
         cached_mc_name = None
         if DATABASE_ENABLED and db_manager:
@@ -1459,19 +2567,16 @@ async def process_single_user(bot, session, user_id):
                 if user_data:
                     cached_uuid = user_data.get('minecraft_uuid')
                     cached_mc_name = user_data.get('current_minecraft_name')
-                    if cached_uuid and cached_mc_name:
-                        print(f"  💾 데이터베이스에서 UUID 조회: {cached_mc_name} (UUID: {cached_uuid[:8]}...)")
-                        uuid = cached_uuid
-                        mc_id = cached_mc_name
             except Exception as db_error:
                 print(f"  ⚠️ 데이터베이스 조회 실패: {db_error}")
 
-        # 데이터베이스에 UUID가 없으면 Discord ID로 UUID 조회
-        if not cached_uuid:
-            print(f"  🔍 API를 통해 UUID 조회 중...")
-            # 1단계: 디스코드 ID → UUID, MC Name
-            url1 = f"{MC_API_BASE}/discord?discord={user_id}"
+        # Discord ID로 UUID 조회 (항상 최신 계정 확인)
+        api_success = False
+        print(f"  🔍 API를 통해 UUID 조회 중...")
+        # 1단계: 디스코드 ID → UUID, MC Name
+        url1 = f"{MC_API_BASE}/discord?discord={user_id}"
 
+        try:
             async with session.get(url1, timeout=aiohttp.ClientTimeout(total=10)) as r1:
                 if r1.status == 429:
                     # 429 오류 처리
@@ -1508,76 +2613,146 @@ async def process_single_user(bot, session, user_id):
                         await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
                     return
                 elif r1.status != 200:
-                    error_message = f"마인크래프트 계정 연동 정보를 찾을 수 없습니다 (HTTP {r1.status})"
-                    print(f"  ❌ 1단계 실패: {r1.status}")
-                    raise Exception(error_message)
+                    raise Exception(f"API 호출 실패 (HTTP {r1.status})")
 
                 data1 = await r1.json()
                 if not data1.get('data') or not data1['data']:
-                    error_message = "마인크래프트 계정이 연동되지 않았습니다"
-                    print(f"  ❌ 마크 계정 연동 데이터 없음")
-                    raise Exception(error_message)
+                    raise Exception("마인크래프트 계정이 연동되지 않았습니다")
 
-                uuid = data1['data'][0].get('uuid')
-                mc_id = data1['data'][0].get('name')
+                # 여러 마크 계정이 연동된 경우, lastOnline 기준 최신 계정 선택
+                linked_accounts = data1['data']
+                if len(linked_accounts) > 1:
+                    print(f"  📋 연동된 마크 계정 {len(linked_accounts)}개 발견 - lastOnline 기준 최신 계정 선택")
+                    # bulk API로 모든 UUID의 lastOnline 조회
+                    uuids_to_check = [acc.get('uuid') for acc in linked_accounts if acc.get('uuid')]
+                    bulk_url = f"{MC_API_BASE}/resident/bulk"
+                    try:
+                        async with session.post(bulk_url, json=uuids_to_check, timeout=aiohttp.ClientTimeout(total=15)) as bulk_r:
+                            if bulk_r.status == 200:
+                                bulk_data = await bulk_r.json()
+                                if bulk_data.get('data'):
+                                    # lastOnline 기준으로 정렬하여 최신 계정 찾기
+                                    sorted_accounts = sorted(
+                                        bulk_data['data'],
+                                        key=lambda x: x.get('lastOnline', 0),
+                                        reverse=True
+                                    )
+                                    latest_account = sorted_accounts[0]
+                                    uuid = latest_account.get('uuid')
+                                    mc_id = latest_account.get('name')
+                                    last_online_ts = latest_account.get('lastOnline', 0)
+                                    last_online_days = (datetime.now().timestamp() * 1000 - last_online_ts) / (1000 * 60 * 60 * 24) if last_online_ts else 0
+                                    print(f"  ✅ 최신 계정 선택: {mc_id} (마지막 접속: {int(last_online_days)}일 전)")
+                                    for acc in sorted_accounts[1:]:
+                                        old_ts = acc.get('lastOnline', 0)
+                                        old_days = (datetime.now().timestamp() * 1000 - old_ts) / (1000 * 60 * 60 * 24) if old_ts else 0
+                                        print(f"    ↳ 이전 계정: {acc.get('name')} (마지막 접속: {int(old_days)}일 전)")
+                                    api_success = True
+                                else:
+                                    # bulk 실패 시 첫 번째 계정 사용
+                                    uuid = linked_accounts[0].get('uuid')
+                                    mc_id = linked_accounts[0].get('name')
+                                    api_success = True
+                            else:
+                                uuid = linked_accounts[0].get('uuid')
+                                mc_id = linked_accounts[0].get('name')
+                                api_success = True
+                    except Exception as bulk_err:
+                        print(f"  ⚠️ Bulk API 조회 실패, 첫 번째 계정 사용: {bulk_err}")
+                        uuid = linked_accounts[0].get('uuid')
+                        mc_id = linked_accounts[0].get('name')
+                        api_success = True
+                else:
+                    uuid = linked_accounts[0].get('uuid')
+                    mc_id = linked_accounts[0].get('name')
+                    api_success = True
 
                 if not uuid or not mc_id:
-                    error_message = "마인크래프트 계정 정보가 불완전합니다"
-                    print(f"  ❌ UUID 또는 이름 없음")
-                    raise Exception(error_message)
+                    raise Exception("마인크래프트 계정 정보가 불완전합니다")
 
                 print(f"  ✅ 마크 정보: {mc_id} (UUID: {uuid[:8]}...)")
 
-                # DB에 UUID와 마크 닉네임 저장
+                # DB에 UUID와 마크 닉네임 저장 (캐시 갱신)
                 if DATABASE_ENABLED and db_manager:
                     try:
-                        db_manager.add_or_update_user(
-                            discord_id=user_id,
-                            minecraft_uuid=uuid,
-                            minecraft_name=mc_id
-                        )
-                        print(f"  💾 UUID와 마크 닉네임 DB에 저장: {mc_id} (UUID: {uuid[:8]}...)")
+                        # 캐시와 다른 경우에만 저장 (마크 계정 변경 감지)
+                        if cached_uuid != uuid or cached_mc_name != mc_id:
+                            if cached_mc_name and cached_mc_name != mc_id:
+                                print(f"  🔄 마크 계정 변경 감지: {cached_mc_name} → {mc_id}")
+                            db_manager.add_or_update_user(
+                                discord_id=user_id,
+                                minecraft_uuid=uuid,
+                                minecraft_name=mc_id
+                            )
+                            print(f"  💾 UUID와 마크 닉네임 DB에 저장: {mc_id} (UUID: {uuid[:8]}...)")
                     except Exception as save_error:
                         print(f"  ⚠️ UUID 저장 실패: {save_error}")
 
                 await asyncio.sleep(5)  # API 제한을 위한 대기 (비블로킹)
-        else:
-            # 데이터베이스에서 UUID를 가져온 경우, API 대기 시간 스킵
-            print(f"  ⚡ 캐시된 UUID 사용 - Discord ID API 호출 스킵")
 
-        # 2단계: UUID → 게임 정보 (항상 개별 API 호출)
+        except Exception as api_error:
+            # API 실패 시 캐시된 UUID 사용 (폴백)
+            if cached_uuid and cached_mc_name:
+                print(f"  ⚠️ API 실패, 캐시된 UUID 사용: {cached_mc_name} (UUID: {cached_uuid[:8]}...)")
+                uuid = cached_uuid
+                mc_id = cached_mc_name
+            else:
+                # 캐시도 없으면 에러
+                error_message = f"마인크래프트 계정 연동 정보를 찾을 수 없습니다"
+                print(f"  ❌ 1단계 실패: {api_error}")
+                raise Exception(error_message)
+
+        # 2단계: UUID → 게임 정보 (항상 개별 API 호출, 실패 시 DB 폴백)
         print(f"  🔍 UUID로 게임 정보 조회 중...")
         game_info = None
         url2 = f"{MC_API_BASE}/resident?uuid={uuid}"
 
-        async with session.get(url2, timeout=aiohttp.ClientTimeout(total=10)) as r2:
-            if r2.status == 429:
-                # 429 오류 처리
-                print(f"🚨 API 속도 제한 감지 (2단계) - 사용자 {user_id} 재대기열 추가")
-                handle_rate_limit()
-                await send_rate_limit_notification(bot)
+        try:
+            async with session.get(url2, timeout=aiohttp.ClientTimeout(total=10)) as r2:
+                if r2.status == 429:
+                    # 429 오류 처리
+                    print(f"🚨 API 속도 제한 감지 (2단계) - 사용자 {user_id} 재대기열 추가")
+                    handle_rate_limit()
+                    await send_rate_limit_notification(bot)
 
-                # 재시도 횟수 확인
-                retry_count = increment_retry_count(user_id)
-                if should_retry(user_id):
-                    queue_manager.add_user(user_id)  # 재대기열에 추가
-                    print(f"  🔄 재시도 {retry_count}/{MAX_RETRY_COUNT}: {member.display_name}")
-                else:
-                    clear_retry_count(user_id)
-                    print(f"  ❌ 최대 재시도 횟수 초과: {member.display_name}")
-                return
-            elif r2.status != 200:
-                error_message = f"게임 정보를 조회할 수 없습니다 (HTTP {r2.status})"
-                print(f"  ❌ 2단계 실패: {r2.status}")
-                raise Exception(error_message)
+                    # 재시도 횟수 확인
+                    retry_count = increment_retry_count(user_id)
+                    if should_retry(user_id):
+                        queue_manager.add_user(user_id)  # 재대기열에 추가
+                        print(f"  🔄 재시도 {retry_count}/{MAX_RETRY_COUNT}: {member.display_name}")
+                    else:
+                        clear_retry_count(user_id)
+                        print(f"  ❌ 최대 재시도 횟수 초과: {member.display_name}")
+                    return
+                elif r2.status != 200:
+                    raise Exception(f"게임 정보를 조회할 수 없습니다 (HTTP {r2.status})")
 
-            data2 = await r2.json()
-            if not data2.get('data') or not data2['data']:
-                error_message = "게임 내 정보가 없습니다"
-                print(f"  ❌ 게임 데이터 없음")
-                raise Exception(error_message)
+                data2 = await r2.json()
+                if not data2.get('data') or not data2['data']:
+                    raise Exception("게임 내 정보가 없습니다")
 
-            game_info = data2['data'][0]
+                game_info = data2['data'][0]
+
+        except Exception as stage2_err:
+            # DB 폴백: all_players 테이블에서 게임 정보 조회
+            if DATABASE_ENABLED and db_manager:
+                try:
+                    db_player = db_manager.get_player_by_uuid(uuid)
+                    if not db_player and mc_id:
+                        db_player = db_manager.get_player_by_name(mc_id)
+                    if db_player:
+                        # DB 컬럼명 → API 필드명 정규화
+                        db_player["nationUuid"] = db_player.get("nation_uuid")
+                        db_player["townUuid"] = db_player.get("town_uuid")
+                        db_player["nationRanks"] = db_player.get("nation_ranks", "")
+                        db_player["townRanks"] = db_player.get("town_ranks", "")
+                        game_info = db_player
+                        print(f"  ℹ️ 2단계 API 실패, DB 캐시로 처리: {mc_id} (원인: {stage2_err})")
+                except Exception as db_err:
+                    print(f"  ⚠️ DB 폴백 실패: {db_err}")
+
+            if not game_info:
+                raise stage2_err
 
         # 모든 게임 정보 추출 (Bulk 또는 API 데이터에서)
         nation = game_info.get('nation')
@@ -1593,6 +2768,7 @@ async def process_single_user(bot, session, user_id):
         nation_ranks = game_info.get('nationRanks', '')
         town_ranks = game_info.get('townRanks', '')
         last_online = game_info.get('lastOnline')
+        joined_town_at_ts = game_info.get('joinedTownAt')  # 밀리초 타임스탬프
 
         # 국가 또는 마을 정보가 없는 경우 처리
         if not nation:
@@ -1632,10 +2808,11 @@ async def process_single_user(bot, session, user_id):
         # 성공 시 재시도 횟수 초기화
         clear_retry_count(user_id)
         
-        # 역할 부여 및 닉네임 변경 (마을 정보 및 UUID 포함)
+        # 역할 부여 및 닉네임 변경 (마을 정보 및 UUID 포함, joinedTownAt 전달)
         role_changes = await update_user_info(
             member, mc_id, nation, guild, town,
-            nation_uuid=nation_uuid, town_uuid=town_uuid
+            nation_uuid=nation_uuid, town_uuid=town_uuid, bot=bot,
+            joined_town_at=joined_town_at_ts
         )
 
         # 데이터베이스에 사용자 정보 저장 (UUID, Minecraft 닉네임 히스토리)
@@ -1756,8 +2933,15 @@ async def process_single_user(bot, session, user_id):
             
             # 실패 채널에 전송
             await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
-            return
-        
+            return {
+                'success': True,
+                'nation': nation,
+                'town': town,
+                'mc_id': mc_id,
+                'role_changes': role_changes,
+                'incomplete': True  # 국가/마을 정보 불완전 플래그
+            }
+
         # 정상적인 성공 로그 전송 (마을 역할 정보 및 마지막 온라인 포함)
         if nation == BASE_NATION:
             embed = discord.Embed(
@@ -1907,7 +3091,8 @@ async def process_single_user(bot, session, user_id):
                             mc_id="❌[ MC ] ❌",
                             nation=None,
                             town=None,
-                            callsign=user_callsign
+                            callsign=user_callsign,
+                            discord_joined_at=member.joined_at
                         )
 
                         if member.nick != new_nickname:
@@ -2140,8 +3325,9 @@ async def execute_auto_roles(bot):
         except Exception as e:
             print(f"⚠️ Bulk 데이터 업데이트 오류: {e} - 개별 API 호출로 진행")
 
-        # 자동 실행 플래그 설정 (CSV 수집 활성화)
+        # 자동 실행 플래그 설정 (CSV 수집 활성화) + 통계 초기화
         _is_auto_execution = True
+        _reset_queue_stats()
         print("📋 CSV 데이터 수집 활성화됨 (스케줄러 자동 실행)")
 
         # 자동역할 관리자에서 역할 목록 가져오기
@@ -2284,7 +3470,9 @@ async def execute_auto_roles(bot):
         embed.timestamp = datetime.now()
 
         await send_log_message(bot, SUCCESS_CHANNEL_ID, embed)
-        await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
+        # 성공/실패 채널이 다른 경우에만 실패 채널에도 전송
+        if FAILURE_CHANNEL_ID != SUCCESS_CHANNEL_ID:
+            await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
 
     except Exception as e:
         print(f"❌ 자동 역할 실행 오류: {e}")
@@ -2306,7 +3494,4 @@ async def execute_auto_roles(bot):
 
         await send_log_message(bot, FAILURE_CHANNEL_ID, embed)
 
-    finally:
-        # 자동 실행 플래그 해제 (CSV 수집 비활성화)
-        _is_auto_execution = False
-        print("📋 CSV 데이터 수집 비활성화됨 (자동 실행 종료)")
+    # finally 블록 제거: 플래그 해제는 대기열 처리 완료 시에만 수행 (process_queue_batch에서 처리)

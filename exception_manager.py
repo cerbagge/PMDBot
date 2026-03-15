@@ -2,6 +2,15 @@ import json
 import os
 from typing import List, Set
 
+
+def _safe_print(msg):
+    """유니코드 문자 출력 오류 방지용 print 함수"""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        print(msg.encode('ascii', errors='replace').decode('ascii'))
+
+
 class ExceptionManager:
     def __init__(self, filename: str = "data/exceptions.json"):
         # data 폴더 생성
@@ -10,7 +19,7 @@ class ExceptionManager:
         self.filename = filename
         self._exceptions: Set[int] = set()
         self.load_exceptions()
-    
+
     def load_exceptions(self):
         """예외 목록을 파일에서 로드"""
         try:
@@ -18,14 +27,14 @@ class ExceptionManager:
                 with open(self.filename, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     self._exceptions = set(data.get('exceptions', []))
-                print(f"✅ 예외 목록 로드: {len(self._exceptions)}명")
+                _safe_print(f"[OK] 예외 목록 로드: {len(self._exceptions)}명")
             else:
-                print(f"📁 예외 파일이 없어서 새로 생성합니다: {self.filename}")
+                _safe_print(f"[INFO] 예외 파일이 없어서 새로 생성합니다: {self.filename}")
                 self.save_exceptions()
         except Exception as e:
-            print(f"❌ 예외 목록 로드 실패: {e}")
+            _safe_print(f"[ERROR] 예외 목록 로드 실패: {e}")
             self._exceptions = set()
-    
+
     def save_exceptions(self):
         """예외 목록을 파일에 저장"""
         try:
@@ -35,25 +44,25 @@ class ExceptionManager:
             }
             with open(self.filename, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            print(f"💾 예외 목록 저장: {len(self._exceptions)}명")
+            _safe_print(f"[OK] 예외 목록 저장: {len(self._exceptions)}명")
         except Exception as e:
-            print(f"❌ 예외 목록 저장 실패: {e}")
-    
+            _safe_print(f"[ERROR] 예외 목록 저장 실패: {e}")
+
     def add_exception(self, user_id: int) -> bool:
         """예외 목록에 사용자 추가"""
         if user_id not in self._exceptions:
             self._exceptions.add(user_id)
             self.save_exceptions()
-            print(f"➕ 예외 추가: {user_id}")
+            _safe_print(f"[+] 예외 추가: {user_id}")
             return True
         return False
-    
+
     def remove_exception(self, user_id: int) -> bool:
         """예외 목록에서 사용자 제거"""
         if user_id in self._exceptions:
             self._exceptions.remove(user_id)
             self.save_exceptions()
-            print(f"➖ 예외 제거: {user_id}")
+            _safe_print(f"[-] 예외 제거: {user_id}")
             return True
         return False
     

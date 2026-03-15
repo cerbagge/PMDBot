@@ -31,46 +31,50 @@ def is_admin(interaction: discord.Interaction) -> bool:
 
 
 # 마을이 국가에 속하는지 확인하는 함수
-async def get_towns_in_nation(nation_name: str):
-    """대체 함수: town_role_manager가 없을 때 기본 마을 목록 반환"""
-    print(f"⚠️ town_role_manager가 없어서 대체 함수 사용: {nation_name}")
+async def get_towns_in_nation(nation_name: str, bot=None):
+    """국가에 속한 마을 목록 반환 (bulk 캐시 우선 → API 폴백)"""
     try:
+        # === bulk 캐시에서 먼저 조회 ===
+        if bot:
+            bulk_mgr = getattr(bot, 'bulk_data_manager', None)
+            if bulk_mgr:
+                cached_nation = bulk_mgr.get_nation_by_name(nation_name)
+                if cached_nation and cached_nation.get('towns'):
+                    towns = cached_nation['towns']
+                    print(f"⚡ Bulk 캐시에서 {nation_name} 마을 목록: {len(towns)}개")
+                    return towns
+
+        # === 캐시 미스 시 API 폴백 ===
         api_base = MC_API_BASE or "https://api.planetearth.kr"
 
         async with aiohttp.ClientSession() as session:
             url = f"{api_base}/nation?name={nation_name}"
-            print(f"🔍 대체 API 호출: {url}")
-
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=2)) as response:
                 if response.status != 200:
-                    print(f"❌ API 응답 오류: HTTP {response.status}")
-                    return ["Seoul", "Busan", "Incheon"]  # 기본 테스트 마을
+                    return ["Seoul", "Busan", "Incheon"]
 
                 data = await response.json()
                 if not data.get('data') or not data['data']:
-                    print(f"❌ 국가 데이터 없음: {nation_name}")
-                    return ["Seoul", "Busan", "Incheon"]  # 기본 테스트 마을
+                    return ["Seoul", "Busan", "Incheon"]
 
                 nation_data = data['data'][0]
                 towns = nation_data.get('towns', [])
 
                 if not towns:
-                    print(f"ℹ️ {nation_name}에 마을이 없습니다.")
-                    return ["Seoul", "Busan", "Incheon"]  # 기본 테스트 마을
+                    return ["Seoul", "Busan", "Incheon"]
 
                 print(f"✅ {nation_name} 마을 목록: {len(towns)}개")
                 return towns
 
     except Exception as e:
-        print(f"❌ 대체 함수에서 오류: {e}")
-        # 최후의 대체 마을 목록
+        print(f"❌ 마을 목록 조회 오류: {e}")
         return ["Seoul", "Busan", "Incheon", "Daegu", "Daejeon", "Gwangju", "Ulsan"]
 
 
-async def verify_town_in_nation(town_name: str, nation_name: str) -> bool:
+async def verify_town_in_nation(town_name: str, nation_name: str, bot=None) -> bool:
     """마을이 특정 국가에 속하는지 확인하는 함수"""
     try:
-        towns = await get_towns_in_nation(nation_name)
+        towns = await get_towns_in_nation(nation_name, bot=bot)
         return town_name in towns
     except Exception as e:
         print(f"❌ 마을 검증 오류: {e}")
@@ -104,7 +108,7 @@ async def town_autocomplete(interaction: discord.Interaction, current: str) -> L
             print(f"🌐 API에서 마을 목록 가져오는 중... (국가: {BASE_NATION})")
             try:
                 # 타임아웃을 짧게 설정 (자동완성은 3초 제한)
-                towns = await get_towns_in_nation(BASE_NATION)
+                towns = await get_towns_in_nation(BASE_NATION, bot=interaction.client)
                 print(f"✅ API에서 {len(towns) if towns else 0}개 마을 가져옴")
 
                 # 캐시 저장
@@ -205,32 +209,43 @@ class TownRoleConfirmView(discord.ui.View):
 
             # 매핑 추가 - UUID 정보 먼저 가져오기
             if TOWN_ROLE_ENABLED and town_role_manager:
-                # API에서 마을 정보 조회하여 UUID 가져오기
                 town_uuid = None
                 nation_uuid = None
                 nation_name = None
 
                 try:
-                    async with aiohttp.ClientSession() as session:
-                        # 마을 정보 조회
-                        url = f"{MC_API_BASE}/town?name={self.town_name}"
-                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                            if response.status == 200:
-                                data = await response.json()
-                                if data.get('status') == 'SUCCESS' and data.get('data'):
-                                    town_data = data['data'][0]
-                                    town_uuid = town_data.get('uuid')
-                                    nation_name = town_data.get('nation')
+                    # === bulk 캐시에서 먼저 조회 ===
+                    bulk_mgr = getattr(interaction.client, 'bulk_data_manager', None)
+                    if bulk_mgr:
+                        cached_town = bulk_mgr.get_town_by_name(self.town_name)
+                        if cached_town:
+                            town_uuid = cached_town.get('uuid')
+                            nation_name = cached_town.get('nation')
+                            if nation_name:
+                                cached_nation = bulk_mgr.get_nation_by_name(nation_name)
+                                if cached_nation:
+                                    nation_uuid = cached_nation.get('uuid')
 
-                                    # 국가 정보 조회하여 nation_uuid 가져오기
-                                    if nation_name:
-                                        url2 = f"{MC_API_BASE}/nation?name={nation_name}"
-                                        async with session.get(url2, timeout=aiohttp.ClientTimeout(total=10)) as response2:
-                                            if response2.status == 200:
-                                                data2 = await response2.json()
-                                                if data2.get('status') == 'SUCCESS' and data2.get('data'):
-                                                    nation_data = data2['data'][0]
-                                                    nation_uuid = nation_data.get('uuid')
+                    # === 캐시 미스 시 API 폴백 ===
+                    if not town_uuid or not nation_uuid:
+                        async with aiohttp.ClientSession() as session:
+                            if not town_uuid:
+                                url = f"{MC_API_BASE}/town?name={self.town_name}"
+                                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                                    if response.status == 200:
+                                        data = await response.json()
+                                        if data.get('status') == 'SUCCESS' and data.get('data'):
+                                            town_data = data['data'][0]
+                                            town_uuid = town_data.get('uuid')
+                                            nation_name = nation_name or town_data.get('nation')
+
+                            if nation_name and not nation_uuid:
+                                url2 = f"{MC_API_BASE}/nation?name={nation_name}"
+                                async with session.get(url2, timeout=aiohttp.ClientTimeout(total=5)) as response2:
+                                    if response2.status == 200:
+                                        data2 = await response2.json()
+                                        if data2.get('status') == 'SUCCESS' and data2.get('data'):
+                                            nation_uuid = data2['data'][0].get('uuid')
 
                     # UUID를 모두 가져온 경우에만 매핑 추가
                     if town_uuid and nation_uuid and nation_name:
@@ -489,7 +504,7 @@ def setup(bot):
 
             try:
                 print(f"🔍 마을 검증 시작: {마을} in {BASE_NATION}")
-                is_valid_town = await verify_town_in_nation(마을, BASE_NATION)
+                is_valid_town = await verify_town_in_nation(마을, BASE_NATION, bot=interaction.client)
 
                 # 검증 결과에 따른 임베드 생성
                 if is_valid_town:

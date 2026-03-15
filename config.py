@@ -1,7 +1,11 @@
 import os
 import shutil
+import json
+from datetime import datetime
 from dotenv import load_dotenv
 from typing import Optional, Union
+
+BASE_NATION_JSON = "data/base_nation.json"
 
 class Config:
     """환경변수를 중앙에서 관리하는 클래스"""
@@ -79,8 +83,9 @@ class Config:
         self.AUTO_ADD_NEW_MEMBERS = self._get_env_bool("AUTO_ADD_NEW_MEMBERS", True)
 
         # 인증 관련 설정
-        self.BASE_NATION = self._get_env("BASE_NATION", "Red_Mafia")  # Legacy: 이름 기반
-        self.BASE_NATION_UUID = self._get_env("BASE_NATION_UUID", None)  # UUID 기반 (우선)
+        self.BASE_NATION = self._get_env("BASE_NATION", "Red_Mafia")
+        self.BASE_NATION_UUID = None  # JSON 또는 API에서 자동 설정
+        self._load_base_nation_json()  # JSON에서 UUID 등 로드
         self.REMOVE_ROLE_IF_WRONG_NATION = self._get_env_bool("REMOVE_ROLE_IF_WRONG_NATION", True)
         self.AUTO_ASSIGN_NATION_ROLES = self._get_env_bool("AUTO_ASSIGN_NATION_ROLES", False)
 
@@ -147,7 +152,7 @@ class Config:
             ("WELCOME_CHANNEL_ID", self.WELCOME_CHANNEL_ID),
             ("AUTO_ADD_NEW_MEMBERS", self.AUTO_ADD_NEW_MEMBERS),
             ("BASE_NATION", self.BASE_NATION),
-            ("BASE_NATION_UUID", self.BASE_NATION_UUID or "❌ 미설정 (이름으로 fallback)"),
+            ("BASE_NATION_UUID", self.BASE_NATION_UUID or "⏳ API 조회 대기"),
             ("REMOVE_ROLE_IF_WRONG_NATION", self.REMOVE_ROLE_IF_WRONG_NATION),
             ("AUTO_ASSIGN_NATION_ROLES", self.AUTO_ASSIGN_NATION_ROLES),
             ("DB_TYPE", self.DB_TYPE),
@@ -172,13 +177,65 @@ class Config:
 
         return role_ids
 
+    def _load_base_nation_json(self):
+        """JSON 파일에서 BASE_NATION 정보 로드"""
+        if not os.path.exists(BASE_NATION_JSON):
+            return
+
+        try:
+            with open(BASE_NATION_JSON, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # .env의 BASE_NATION과 JSON의 이름/UUID가 일치하는지 확인
+            json_name = data.get('name')
+            json_uuid = data.get('uuid')
+
+            if not json_uuid:
+                return
+
+            # .env에서 BASE_NATION 이름이 변경됐으면 JSON 무시 (다시 API 조회)
+            if json_name and self.BASE_NATION and json_name.lower() != self.BASE_NATION.lower():
+                print(f"⚠️ .env BASE_NATION({self.BASE_NATION}) ≠ JSON({json_name}) → API에서 재조회 예정")
+                return
+
+            self.BASE_NATION_UUID = json_uuid
+            # API에서 가져온 정확한 이름으로 갱신
+            if json_name:
+                self.BASE_NATION = json_name
+            print(f"📂 base_nation.json 로드: {self.BASE_NATION} (UUID: {json_uuid[:8]}...)")
+        except Exception as e:
+            print(f"⚠️ base_nation.json 로드 실패: {e}")
+
+    def save_base_nation_json(self, nation_data: dict = None):
+        """BASE_NATION 정보를 JSON 파일로 저장"""
+        os.makedirs("data", exist_ok=True)
+
+        data = {
+            "name": self.BASE_NATION,
+            "uuid": self.BASE_NATION_UUID,
+            "updated_at": datetime.now().isoformat(),
+        }
+
+        # API에서 받은 상세 정보가 있으면 추가
+        if nation_data:
+            for key in ('king', 'capital', 'residents', 'towns', 'allies', 'enemies', 'board'):
+                if key in nation_data:
+                    data[key] = nation_data[key]
+
+        try:
+            with open(BASE_NATION_JSON, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            print(f"💾 base_nation.json 저장: {self.BASE_NATION} (UUID: {self.BASE_NATION_UUID[:8]}...)")
+        except Exception as e:
+            print(f"⚠️ base_nation.json 저장 실패: {e}")
+
     async def initialize_base_nation_uuid(self):
         """
-        BASE_NATION 이름을 사용해서 UUID 조회 및 설정
-        BASE_NATION_UUID가 없고 BASE_NATION만 있을 때 자동으로 UUID를 찾음
+        BASE_NATION UUID를 초기화.
+        JSON 캐시에서 이미 로드됐으면 스킵, 없으면 API 조회 후 JSON 저장.
         """
         if self.BASE_NATION_UUID:
-            print(f"✅ BASE_NATION_UUID 이미 설정됨: {self.BASE_NATION_UUID}")
+            print(f"✅ BASE_NATION_UUID 준비 완료: {self.BASE_NATION_UUID}")
             return True
 
         if not self.BASE_NATION:
@@ -188,15 +245,15 @@ class Config:
         try:
             from pe_api_utils import pe_api
 
-            print(f"🔍 BASE_NATION 이름으로 UUID 조회 중: {self.BASE_NATION}")
+            print(f"🔍 BASE_NATION API 조회 중: {self.BASE_NATION}")
             nation_data = await pe_api.get_nation_by_name(self.BASE_NATION)
 
             if nation_data and 'uuid' in nation_data:
                 self.BASE_NATION_UUID = nation_data['uuid']
-                print(f"✅ BASE_NATION_UUID 설정 완료: {self.BASE_NATION_UUID}")
-
-                # .env 파일 업데이트 제안 (선택적)
-                print(f"💡 .env 파일에 추가 권장: BASE_NATION_UUID={self.BASE_NATION_UUID}")
+                # API에서 받은 정확한 이름으로 갱신
+                self.BASE_NATION = nation_data.get('name', self.BASE_NATION)
+                self.save_base_nation_json(nation_data)
+                print(f"✅ BASE_NATION 초기화 완료: {self.BASE_NATION} ({self.BASE_NATION_UUID})")
                 return True
             else:
                 print(f"❌ BASE_NATION UUID 조회 실패: {self.BASE_NATION}")
@@ -207,19 +264,10 @@ class Config:
             return False
 
     async def set_base_nation(self, nation_name: str) -> tuple[bool, str, Optional[str]]:
-        """
-        서버의 기본 국가를 변경합니다 (관리자 전용)
-
-        Args:
-            nation_name: 설정할 국가 이름
-
-        Returns:
-            tuple[bool, str, Optional[str]]: (성공 여부, 메시지, UUID)
-        """
+        """서버의 기본 국가를 변경합니다 (관리자 전용)"""
         try:
             from pe_api_utils import pe_api
 
-            # 국가 정보 조회
             print(f"🔍 국가 정보 조회 중: {nation_name}")
             nation_data = await pe_api.get_nation_by_name(nation_name)
 
@@ -229,22 +277,15 @@ class Config:
             if 'uuid' not in nation_data:
                 return False, f"❌ '{nation_name}' 국가의 UUID를 가져올 수 없습니다.", None
 
-            # 이전 설정 백업
             old_nation = self.BASE_NATION
-            old_uuid = self.BASE_NATION_UUID
 
-            # 새 국가로 설정
             self.BASE_NATION = nation_data.get('name', nation_name)
             self.BASE_NATION_UUID = nation_data['uuid']
+            self.save_base_nation_json(nation_data)
 
             print(f"✅ BASE_NATION 변경: {old_nation} → {self.BASE_NATION}")
-            print(f"✅ BASE_NATION_UUID 설정: {self.BASE_NATION_UUID}")
 
-            # .env 파일 업데이트 권장 메시지
-            update_msg = f"\n\n💡 .env 파일을 수동으로 업데이트해주세요:\n"
-            update_msg += f"```\nBASE_NATION={self.BASE_NATION}\nBASE_NATION_UUID={self.BASE_NATION_UUID}\n```"
-
-            return True, f"✅ 서버 국가가 **{self.BASE_NATION}**로 변경되었습니다!{update_msg}", self.BASE_NATION_UUID
+            return True, f"✅ 서버 국가가 **{self.BASE_NATION}**로 변경되었습니다!\n`UUID: {self.BASE_NATION_UUID}`", self.BASE_NATION_UUID
 
         except Exception as e:
             print(f"❌ BASE_NATION 설정 실패: {e}")

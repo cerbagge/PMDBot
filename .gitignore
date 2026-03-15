@@ -71,3 +71,9 @@ nul
 # Test files
 test_*.py
 *_test.py
+newbie_config.json
+
+
+# Text and batch files
+*.txt
+*.bat

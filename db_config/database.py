@@ -21,9 +21,14 @@ class DBType(Enum):
     POSTGRESQL = "postgresql"
 
 
-def get_db_type() -> DBType:
-    """현재 설정된 데이터베이스 타입 반환"""
-    db_type = os.getenv("DB_TYPE", "sqlite").lower()
+def get_db_type() -> str:
+    """현재 DB_TYPE 반환 (sqlite 또는 postgresql)"""
+    return os.getenv("DB_TYPE", "sqlite").lower().strip()
+
+
+def get_db_type_enum() -> DBType:
+    """현재 설정된 데이터베이스 타입 반환 (Enum)"""
+    db_type = get_db_type()
     if db_type in ("postgresql", "postgres", "pg"):
         return DBType.POSTGRESQL
     return DBType.SQLITE
@@ -31,12 +36,12 @@ def get_db_type() -> DBType:
 
 def is_sqlite() -> bool:
     """SQLite 사용 여부"""
-    return get_db_type() == DBType.SQLITE
+    return get_db_type_enum() == DBType.SQLITE
 
 
 def is_postgresql() -> bool:
     """PostgreSQL 사용 여부"""
-    return get_db_type() == DBType.POSTGRESQL
+    return get_db_type_enum() == DBType.POSTGRESQL
 
 
 # ===== SQLite 설정 =====
@@ -63,7 +68,18 @@ def get_sqlite_log_db_path() -> str:
     return os.path.join(log_dir, db_file)
 
 
+def get_sqlite_path() -> str:
+    """SQLite 메인 DB 파일 경로 반환 (간단 경로)"""
+    return os.getenv("SQLITE_DB_PATH", "data/bot.db")
+
+
+def get_sqlite_log_path() -> str:
+    """SQLite 로그 DB 파일 경로 반환 (간단 경로)"""
+    return os.getenv("SQLITE_LOG_PATH", "data/logs/bot_logs.db")
+
+
 # ===== PostgreSQL 설정 =====
+
 
 def get_connection_params() -> dict:
     """PostgreSQL 연결 파라미터 반환"""

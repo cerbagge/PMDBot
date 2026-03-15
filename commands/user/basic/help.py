@@ -1,4 +1,4 @@
-# commands/admin/basic/help.py
+# commands/user/basic/help.py
 # /도움말 명령어 - 봇의 모든 명령어를 확인
 
 import discord
@@ -46,171 +46,192 @@ def setup(bot):
 
     @bot.tree.command(name="도움말", description="봇의 모든 명령어를 확인합니다")
     async def 도움말(interaction: discord.Interaction):
-        """봇의 모든 명령어와 설명을 표시 - 개선된 버전"""
+        """봇의 모든 명령어와 설명을 표시"""
 
         # 관리자 권한 확인
         is_admin = interaction.user.guild_permissions.administrator
 
-        # 메인 임베드 생성
-        embed = discord.Embed(
+        # ===== 페이지 1: 일반 사용자 명령어 =====
+        embed1 = discord.Embed(
             title="📖 국민확인봇 명령어 가이드",
-            description=f"안녕하세요 {interaction.user.mention}님! 🎉\n사용 가능한 명령어들을 확인해보세요.",
+            description=f"안녕하세요 {interaction.user.mention}님!\n사용 가능한 명령어들을 확인해보세요.",
             color=0x2f3136
         )
 
-        # 썸네일 추가 (봇 아바타)
         if bot.user.avatar:
-            embed.set_thumbnail(url=bot.user.avatar.url)
+            embed1.set_thumbnail(url=bot.user.avatar.url)
 
         # 일반 사용자 명령어
-        user_commands_info = {
-            "확인": {
-                "emoji": "✅",
-                "desc": "자신의 국적을 확인하고 역할을 받습니다",
-                "usage": "`/확인`",
-                "note": "마인크래프트 계정이 연동되어 있어야 합니다"
-            },
-            "콜사인": {
-                "emoji": "🏷️",
-                "desc": "개인 콜사인을 설정합니다 (15일 쿨타임)",
-                "usage": "`/콜사인 텍스트:콜사인이름`",
-                "note": "최대 20자, 국가명 대신 표시됩니다" if CALLSIGN_ENABLED else "콜사인 기능이 비활성화됨"
-            },
-            "국가설정": {
-                "emoji": "🌍",
-                "desc": "자신의 국가를 설정합니다",
-                "usage": "`/국가설정 국가:국가이름`",
-                "note": "영어로 정확한 국가명을 입력하세요"
-            },
-            "도움말": {
-                "emoji": "📖",
-                "desc": "봇의 모든 명령어를 확인합니다",
-                "usage": "`/도움말`",
-                "note": "언제든지 사용 가능합니다"
-            }
-        }
+        user_cmd_text = (
+            "✅ **`/확인`**\n"
+            "   └ 자신의 국적을 확인하고 역할을 받습니다\n"
+            "   └ 💡 *마인크래프트 계정이 연동되어 있어야 합니다*\n\n"
 
-        user_cmd_text = ""
-        for cmd_name, info in user_commands_info.items():
-            user_cmd_text += f"{info['emoji']} **{info['usage']}**\n"
-            user_cmd_text += f"   └ {info['desc']}\n"
-            user_cmd_text += f"   └ 💡 *{info['note']}*\n\n"
+            "🔍 **`/resident <이름>`**\n"
+            "   └ 플레이어 정보를 확인합니다 (온라인 상태, 접속일 등)\n\n"
 
-        embed.add_field(
+            "🏛️ **`/nation <이름>`**\n"
+            "   └ 국가 정보를 확인합니다 (왕, 국민 수, 마을, 동맹 등)\n\n"
+
+            "🏘️ **`/town <이름>`**\n"
+            "   └ 마을 정보를 확인합니다 (시장, 주민 수, 클레임 등)\n\n"
+
+            "🏷️ **`/콜사인 <텍스트>`**\n"
+            f"   └ {'개인 콜사인을 설정합니다 (15일 쿨타임, 최대 20자)' if CALLSIGN_ENABLED else '콜사인 기능이 비활성화됨'}\n\n"
+
+            "✈️ **`/여행신청`**\n"
+            "   └ 여행 신청서를 제출합니다\n\n"
+
+            "📖 **`/도움말`**\n"
+            "   └ 이 도움말을 표시합니다"
+        )
+
+        embed1.add_field(
             name="👥 일반 사용자 명령어",
-            value=user_cmd_text.strip(),
+            value=user_cmd_text,
             inline=False
         )
 
-        # 관리자 명령어 - 카테고리별로 분류
+        embeds = [embed1]
+
+        # ===== 관리자 명령어 =====
         if is_admin:
-            # 기본 관리 명령어
-            basic_admin_text = ""
-            basic_admin_commands = {
-                "테스트": "봇의 기본 기능을 테스트합니다",
-                "스케줄확인": "자동 실행 스케줄 정보를 확인합니다",
-                "서버국가설정": "디스코드 봇이 관리할 기본 국가를 설정합니다"
-            }
-
-            for cmd_name, desc in basic_admin_commands.items():
-                basic_admin_text += f"🔧 **`/{cmd_name}`** - {desc}\n"
-
-            embed.add_field(
-                name="🛠️ 기본 관리 명령어",
-                value=basic_admin_text,
-                inline=True
+            # 페이지 2: 관리자 명령어 - 기본 / 대기열 / 스케줄러
+            embed2 = discord.Embed(
+                title="🛠️ 관리자 명령어 (1/3)",
+                color=0x2f3136
             )
 
-            # 사용자 관리 명령어
-            user_mgmt_text = ""
-            user_mgmt_commands = {
-                "국민확인": "사용자들의 국적을 확인합니다",
-                "예외설정": "자동실행 예외 대상을 관리합니다"
-            }
+            # 기본 관리
+            basic_text = (
+                "🔧 **`/테스트`** - 봇의 기본 기능을 테스트합니다\n"
+                "🔧 **`/국가설정 <국가>`** - 봇이 관리할 기본 국가를 설정합니다\n"
+                "🔧 **`/스케줄확인`** - 자동 실행 스케줄 정보를 확인합니다"
+            )
+            embed2.add_field(name="🔧 기본 관리", value=basic_text, inline=False)
 
-            # 콜사인 관리 추가 (활성화된 경우)
+            # 대기열 관리
+            queue_text = (
+                "📋 **`/대기열추가 <유저 또는 역할>`** - 유저/역할 멤버를 대기열에 추가\n"
+                "📋 **`/대기열상태`** - 현재 대기열 상태를 확인합니다\n"
+                "📋 **`/대기열초기화`** - 대기열을 모두 비웁니다\n"
+                "📋 **`/서버대기열`** - MC 서버 접속 대기열 인원을 확인합니다\n"
+                "📋 **`/자동실행시작`** - 자동 역할 부여를 수동으로 시작합니다\n"
+                "📋 **`/자동실행`** - 자동 등록할 역할을 설정합니다"
+            )
+            embed2.add_field(name="📋 대기열 관리", value=queue_text, inline=False)
+
+            # 사용자 관리
+            user_mgmt_text = (
+                "👤 **`/예외설정`** - 자동실행 예외 대상을 관리합니다\n"
+                "👤 **`/뉴비설정`** - 뉴비 알림 채널/역할을 설정합니다\n"
+                "👤 **`/뉴비확인`** - 현재 뉴비 목록을 표시합니다"
+            )
             if CALLSIGN_ENABLED:
-                user_mgmt_commands["콜사인관리"] = "사용자 콜사인을 관리합니다"
+                user_mgmt_text += "\n👤 **`/콜사인관리`** - 사용자 콜사인을 관리합니다"
+            embed2.add_field(name="👤 사용자 관리", value=user_mgmt_text, inline=False)
 
-            for cmd_name, desc in user_mgmt_commands.items():
-                user_mgmt_text += f"👤 **`/{cmd_name}`** - {desc}\n"
+            embeds.append(embed2)
 
-            embed.add_field(
-                name="👥 사용자 관리",
-                value=user_mgmt_text,
-                inline=True
+            # 페이지 3: 동맹 / 마을 / 여행
+            embed3 = discord.Embed(
+                title="🛠️ 관리자 명령어 (2/3)",
+                color=0x2f3136
             )
 
-            # 대기열 관리 명령어
-            queue_mgmt_text = ""
-            queue_mgmt_commands = {
-                "대기열상태": "현재 대기열 상태를 확인합니다",
-                "대기열초기화": "대기열을 모두 비웁니다",
-                "자동실행시작": "자동 역할 부여를 수동으로 시작합니다",
-                "자동실행": "자동 등록할 역할을 설정합니다"
-            }
-
-            for cmd_name, desc in queue_mgmt_commands.items():
-                queue_mgmt_text += f"📋 **`/{cmd_name}`** - {desc}\n"
-
-            embed.add_field(
-                name="📋 대기열 관리",
-                value=queue_mgmt_text,
-                inline=False
-            )
-
-            # 동맹 관리 명령어 추가
-            alliance_mgmt_text = (
-                "🤝 **`/동맹설정 기능:추가 이름:국가명 역할:@역할`** - 새로운 동맹 국가/마을을 추가합니다 (자동 감지)\n"
-                "🤝 **`/동맹설정 기능:제거 이름:국가명`** - 동맹을 제거합니다\n"
-                "🤝 **`/동맹설정 기능:목록`** - 동맹 목록을 확인합니다 (UUID 기반)\n"
-                "🤝 **`/동맹설정 기능:역할설정 이름:국가명 역할:@역할`** - 동맹의 역할을 설정합니다\n"
+            # 동맹 관리
+            alliance_text = (
+                "🤝 **`/동맹설정 기능:추가 이름:<국가명> 역할:@역할`** - 동맹 추가\n"
+                "🤝 **`/동맹설정 기능:제거 이름:<국가명>`** - 동맹 제거\n"
+                "🤝 **`/동맹설정 기능:목록`** - 동맹 목록 확인 (UUID 기반)\n"
+                "🤝 **`/동맹설정 기능:역할설정 이름:<국가명> 역할:@역할`** - 동맹 역할 설정\n"
                 "🔍 **`/동맹확인`** - 모든 멤버의 동맹 역할을 재확인합니다"
             )
+            embed3.add_field(name="🤝 동맹 관리", value=alliance_text, inline=False)
 
-            embed.add_field(
-                name="🤝 동맹 관리",
-                value=alliance_mgmt_text,
-                inline=False
-            )
-
-            # 마을 역할 관리 (활성화된 경우에만)
+            # 마을 역할
             if TOWN_ROLE_ENABLED:
-                town_mgmt_text = (
+                town_text = (
                     "🏘️ **`/마을역할 기능:추가`** - 마을과 역할을 연동합니다\n"
                     "🏘️ **`/마을역할 기능:제거`** - 마을 역할 연동을 해제합니다\n"
-                    "🏘️ **`/마을역할 기능:목록`** - 연동된 마을-역할 목록을 확인합니다\n"
-                    "🏘️ **`/마을역할 기능:마을목록`** - 마을 연동 가이드를 확인합니다\n"
+                    "🏘️ **`/마을역할 기능:목록`** - 연동된 마을-역할 목록\n"
+                    "🏘️ **`/마을역할 기능:마을목록`** - 마을 연동 가이드\n"
                     "🧪 **`/마을테스트`** - 마을 검증 기능을 테스트합니다"
                 )
-
-                embed.add_field(
-                    name="🏘️ 마을 역할 관리",
-                    value=town_mgmt_text,
-                    inline=False
-                )
             else:
-                embed.add_field(
-                    name="🏘️ 마을 역할 관리",
-                    value="🔴 **비활성화됨** - town_role_manager 모듈이 필요합니다.",
-                    inline=False
-                )
+                town_text = "🔴 **비활성화됨** - town_role_manager 모듈이 필요합니다."
+            embed3.add_field(name="🏘️ 마을 역할 관리", value=town_text, inline=False)
+
+            # 여행 관리
+            travel_text = (
+                "✈️ **`/여행관리 기능:여행추가`** - 여행을 수동으로 추가합니다\n"
+                "✈️ **`/여행관리 기능:여행종료`** - 진행 중인 여행을 종료합니다\n"
+                "✈️ **`/여행관리 기능:여행리스트`** - 여행 목록을 확인합니다\n"
+                "✈️ **`/여행관리 기능:여행로그`** - 여행 로그를 확인합니다\n"
+                "✈️ **`/여행관리 기능:채널`** - 여행 알림 채널을 설정합니다\n"
+                "✈️ **`/여행관리 기능:역할`** - 여행 역할을 설정합니다\n"
+                "✈️ **`/여행관리 기능:현황`** - 여행 시스템 현황을 확인합니다"
+            )
+            embed3.add_field(name="✈️ 여행 관리", value=travel_text, inline=False)
+
+            embeds.append(embed3)
+
+            # 페이지 4: 시스템 / &MF 명령어
+            embed4 = discord.Embed(
+                title="🛠️ 관리자 명령어 (3/3)",
+                color=0x2f3136
+            )
+
+            # 시스템 관리
+            system_text = (
+                "🗄️ **`/데이터베이스`** - 데이터베이스 조회 및 관리\n"
+                "📜 **`/로그조회`** - 시스템 로그를 조회합니다\n"
+                "📜 **`/로그관리`** - 로그 시스템을 관리합니다"
+            )
+            embed4.add_field(name="🗄️ 시스템 관리", value=system_text, inline=False)
+
+            # &MF 명령어
+            mf_text = (
+                "```\n"
+                "&MF {연동} <디스코드ID> <MC닉네임>\n"
+                "```\n"
+                "Mojang API로 UUID를 조회하여 DB에 저장합니다.\n"
+                "연동된 유저는 대기열 처리 시 API 조회를 건너뜁니다.\n\n"
+
+                "```\n"
+                "&MF {대기열} <디스코드ID>\n"
+                "```\n"
+                "유저를 대기열에 추가합니다.\n\n"
+
+                "```\n"
+                "&MF <디스코드ID 또는 @멘션>\n"
+                "```\n"
+                "현재 채널 이름을 해당 유저의 국가 대사관 형식으로 변경합니다.\n\n"
+
+                "```\n"
+                "&MF {채널_이름} [형식] <디스코드ID>\n"
+                "```\n"
+                "사용자 정의 형식으로 채널 이름을 변경합니다.\n"
+                "플레이스홀더: `{CC}` 콜사인 / `{NN}` 국가 / `{TT}` 마을 / `{MC}` MC닉네임"
+            )
+            embed4.add_field(name="💬 &MF 메시지 명령어", value=mf_text, inline=False)
+
+            embeds.append(embed4)
+
         else:
-            # 관리자가 아닌 경우 (서버국가설정 명령어 추가로 +1)
-            total_admin_commands = 18 + (1 if CALLSIGN_ENABLED else 0) + (5 if TOWN_ROLE_ENABLED else 0)
-            embed.add_field(
+            embed1.add_field(
                 name="🛡️ 관리자 전용 명령어",
-                value=f"🔒 관리자 전용 명령어 **{total_admin_commands}개**가 있습니다.\n"
-                      f"관리자 권한이 필요합니다.",
+                value="🔒 관리자 권한이 필요한 명령어가 추가로 있습니다.",
                 inline=False
             )
 
-        # 봇 상태 정보
+        # ===== 봇 상태 (마지막 임베드에 추가) =====
+        last_embed = embeds[-1]
+
         queue_size = queue_manager.get_queue_size()
         is_processing = queue_manager.is_processing()
         processing_status = "🔄 처리 중" if is_processing else "⏸️ 대기 중"
 
-        # 동맹 시스템 상태 추가
         try:
             alliance_data = load_alliance_data()
             alliance_count = len(alliance_data["alliances"])
@@ -218,42 +239,22 @@ def setup(bot):
             alliance_count = 0
 
         status_text = (
-            f"🌐 **API 상태**: {'🟢 연결됨' if MC_API_BASE else '🔴 설정 필요'}\n"
+            f"🌐 **API**: {'🟢 연결됨' if MC_API_BASE else '🔴 설정 필요'}\n"
             f"🏴 **기본 국가**: {BASE_NATION}\n"
-            f"🤝 **동맹 국가**: {alliance_count}개\n"
-            f"🏘️ **마을 역할**: {'🟢 활성화' if TOWN_ROLE_ENABLED else '🔴 비활성화'}\n"
-            f"🏷️ **콜사인 기능**: {'🟢 활성화' if CALLSIGN_ENABLED else '🔴 비활성화'}\n"
+            f"🤝 **동맹**: {alliance_count}개\n"
+            f"🏘️ **마을 역할**: {'🟢' if TOWN_ROLE_ENABLED else '🔴'}\n"
+            f"🏷️ **콜사인**: {'🟢' if CALLSIGN_ENABLED else '🔴'}\n"
             f"📋 **대기열**: {queue_size}명 ({processing_status})"
         )
 
-        embed.add_field(
-            name="📊 봇 상태",
-            value=status_text,
-            inline=True
-        )
+        last_embed.add_field(name="📊 봇 상태", value=status_text, inline=False)
 
-        # 사용 팁
-        tips_text = (
-            "💡 `/확인` 명령어로 언제든 역할을 다시 받을 수 있어요!\n"
-            "💡 `/국가설정`으로 자신의 국가를 설정하세요.\n"
-            f"💡 {'`/콜사인`으로 개인 콜사인을 설정하세요.' if CALLSIGN_ENABLED else '콜사인 기능이 비활성화되어 있습니다.'}\n"
-            "💡 마인크래프트 계정 연동이 필요합니다."
-        )
-
-        embed.add_field(
-            name="💡 사용 팁",
-            value=tips_text,
-            inline=True
-        )
-
-        # 푸터 정보
+        # 푸터
         total_commands = len(bot.tree.get_commands())
-        embed.set_footer(
+        last_embed.set_footer(
             text=f"🤖 {bot.user.name} • 총 {total_commands}개 명령어 • 권한: {'관리자' if is_admin else '일반 사용자'}",
             icon_url=bot.user.avatar.url if bot.user.avatar else None
         )
+        last_embed.timestamp = datetime.datetime.now()
 
-        # 현재 시간 추가
-        embed.timestamp = datetime.datetime.now()
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embeds=embeds, ephemeral=True)

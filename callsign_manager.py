@@ -45,26 +45,41 @@ class CallsignManager:
                 return {}
         return {}
     
-    def save_callsigns(self):
-        """콜사인 데이터 저장 (JSON + DB)"""
+    def save_callsigns(self, changed_user_id: int = None):
+        """콜사인 데이터 저장 (JSON + DB)
+
+        Args:
+            changed_user_id: 변경된 특정 유저 ID (지정 시 해당 유저만 DB 저장)
+        """
         # JSON 파일에 저장
         with open(self.filename, 'w', encoding='utf-8') as f:
             json.dump(self.callsigns, f, ensure_ascii=False, indent=2)
 
         # DB에도 저장 (활성화된 경우)
         if self.db_manager:
-            for user_id_str, data in self.callsigns.items():
-                try:
-                    # 숫자가 아닌 키(메타데이터)는 건너뛰기
-                    user_id = int(user_id_str)
-                    callsign = data.get('callsign', '')
-                    admin_override = data.get('admin_override', False)
-                    self.db_manager.set_callsign(user_id, callsign, admin_override)
-                except ValueError:
-                    # 숫자가 아닌 키는 조용히 건너뛰기 (메타데이터)
-                    continue
-                except Exception as e:
-                    print(f"⚠️ DB 콜사인 저장 실패 ({user_id_str}): {e}")
+            if changed_user_id is not None:
+                # 특정 유저만 저장 (빠름)
+                user_id_str = str(changed_user_id)
+                data = self.callsigns.get(user_id_str)
+                if data:
+                    try:
+                        callsign = data.get('callsign', '')
+                        admin_override = data.get('admin_override', False)
+                        self.db_manager.set_callsign(changed_user_id, callsign, admin_override)
+                    except Exception as e:
+                        print(f"⚠️ DB 콜사인 저장 실패 ({changed_user_id}): {e}")
+            else:
+                # 전체 저장 (초기화 등 특수한 경우)
+                for user_id_str, data in self.callsigns.items():
+                    try:
+                        user_id = int(user_id_str)
+                        callsign = data.get('callsign', '')
+                        admin_override = data.get('admin_override', False)
+                        self.db_manager.set_callsign(user_id, callsign, admin_override)
+                    except ValueError:
+                        continue
+                    except Exception as e:
+                        print(f"⚠️ DB 콜사인 저장 실패 ({user_id_str}): {e}")
     
     def load_banned_users(self) -> Dict:
         """콜사인 사용 금지 사용자 목록 로드"""
@@ -100,8 +115,12 @@ class CallsignManager:
                 return {}
         return {}
     
-    def save_cooldowns(self):
-        """쿨타임 데이터 저장 (JSON + DB)"""
+    def save_cooldowns(self, changed_user_id: int = None):
+        """쿨타임 데이터 저장 (JSON + DB)
+
+        Args:
+            changed_user_id: 변경된 특정 유저 ID (지정 시 해당 유저만 DB 저장)
+        """
         cooldown_file = "callsign_cooldowns.json"
         # datetime 객체를 ISO 형식 문자열로 변환
         data = {}
@@ -114,15 +133,25 @@ class CallsignManager:
 
         # DB에도 저장 (활성화된 경우)
         if self.db_manager:
-            for user_id_str, timestamp in self.cooldowns.items():
-                try:
-                    user_id = int(user_id_str)
-                    self.db_manager.set_cooldown(user_id, timestamp)
-                except ValueError:
-                    # 숫자가 아닌 키는 건너뛰기
-                    continue
-                except Exception as e:
-                    print(f"⚠️ DB 쿨타임 저장 실패 ({user_id_str}): {e}")
+            if changed_user_id is not None:
+                # 특정 유저만 저장 (빠름)
+                user_id_str = str(changed_user_id)
+                timestamp = self.cooldowns.get(user_id_str)
+                if timestamp:
+                    try:
+                        self.db_manager.set_cooldown(changed_user_id, timestamp)
+                    except Exception as e:
+                        print(f"⚠️ DB 쿨타임 저장 실패 ({changed_user_id}): {e}")
+            else:
+                # 전체 저장 (초기화 등 특수한 경우)
+                for user_id_str, timestamp in self.cooldowns.items():
+                    try:
+                        user_id = int(user_id_str)
+                        self.db_manager.set_cooldown(user_id, timestamp)
+                    except ValueError:
+                        continue
+                    except Exception as e:
+                        print(f"⚠️ DB 쿨타임 저장 실패 ({user_id_str}): {e}")
     
     def ban_user(self, user_id: int, banned_by: int, reason: str = "관리자 결정") -> Tuple[bool, str]:
         """
@@ -238,11 +267,11 @@ class CallsignManager:
             cooldown_end = datetime.now() + timedelta(days=15)
             self.cooldowns[user_id_str] = cooldown_end
 
-            # JSON 파일과 DB에 쿨타임 저장
-            self.save_cooldowns()
+            # JSON 파일과 DB에 쿨타임 저장 (해당 유저만)
+            self.save_cooldowns(changed_user_id=user_id)
 
-        # JSON 파일에 저장
-        self.save_callsigns()
+        # JSON 파일에 저장 (해당 유저만)
+        self.save_callsigns(changed_user_id=user_id)
 
         # DB에도 저장 (활성화된 경우)
         if self.db_manager:
@@ -320,8 +349,8 @@ class CallsignManager:
                     except Exception as e:
                         print(f"⚠️ DB 쿨타임 삭제 실패 ({user_id}): {e}")
 
-                self.save_cooldowns()
-            self.save_callsigns()
+                self.save_cooldowns(changed_user_id=user_id)
+            self.save_callsigns(changed_user_id=user_id)
             return True
         return False
     
@@ -481,13 +510,16 @@ class CallsignManager:
         return self.role_formats.copy()
 
     def apply_format_to_nickname(self, format_string: str, mc_id: str = None, nation: str = None,
-                                 town: str = None, callsign: str = None) -> str:
+                                 town: str = None, callsign: str = None,
+                                 discord_joined_at=None) -> str:
         """
         양식 문자열에 실제 값을 치환하여 닉네임 생성
 
         새로운 문법 지원:
-        - {CC}, {NN}, {TT}, {MC} - 기본 변수
+        - {CC}, {NN}, {TT}, {MC}, {DC} - 기본 변수
         - [A/B/C] - A → B → C 순서로 폴백 (값이 없으면 다음 옵션)
+        - [A/and/B/C] - A와 B 모두 있으면 AB 출력, 아니면 C로 폴백
+        - [A/or/B/C] - A와 B 중 하나라도 있으면 있는 것만 출력, 둘 다 없으면 C로 폴백
         - "텍스트" 또는 '텍스트' - 리터럴 텍스트
 
         Args:
@@ -496,11 +528,28 @@ class CallsignManager:
             nation: PlanetEarth 국가 이름
             town: PlanetEarth 마을 이름
             callsign: 콜사인
+            discord_joined_at: Discord 서버 참여 일시 (datetime 또는 timezone-aware datetime)
+                               {DC} 변수 (서버 참여 일수) 계산에 사용
 
         Returns:
             완성된 닉네임
         """
         import re
+        from datetime import datetime, timezone
+
+        # {DC}: 서버 참여 일수 계산
+        dc_value = None
+        if discord_joined_at is not None:
+            try:
+                now = datetime.now(timezone.utc)
+                # timezone-aware/naive 모두 처리
+                if discord_joined_at.tzinfo is None:
+                    joined = discord_joined_at.replace(tzinfo=timezone.utc)
+                else:
+                    joined = discord_joined_at
+                dc_value = str((now - joined).days)
+            except Exception:
+                pass
 
         # 변수 값 매핑
         variables = {
@@ -509,6 +558,7 @@ class CallsignManager:
             'TT': town if town and town not in ['', '❌', '무소속'] else None,
             'MC': mc_id if mc_id and mc_id not in ['', '❌', 'Unknown'] else None,
             'MF': mc_id if mc_id and mc_id not in ['', '❌', 'Unknown'] else None,
+            'DC': dc_value,
         }
 
         def evaluate_expression(expr: str) -> str:
@@ -518,8 +568,7 @@ class CallsignManager:
             - {VAR} - 단순 변수
             - "text" 또는 'text' - 리터럴 문자열
             - {CC}{NN} - 복합 표현식 (모두 있어야 성공)
-            - {CC}&{NN} - 명시적 AND 연산자 (모두 있어야 성공)
-            - {CC}&" / "&{NN} - 변수와 리터럴 조합
+            - {CC}" / "{NN} - 변수와 리터럴 조합
             """
             expr = expr.strip()
 
@@ -539,22 +588,13 @@ class CallsignManager:
                 value = variables.get(var_name)
                 return value if value else None
 
-            # 복합 표현식: {CC}&{NN}, {CC}{NN}, {CC}" / " 같은 형태
+            # 복합 표현식: {CC}{NN}, {CC}" / "{NN} 같은 형태
             # 변수와 리터럴을 찾아서 조합
             parts = []
             last_pos = 0
             failed = False
 
             for match in matches:
-                # 매치 사이의 공백이나 텍스트도 포함 (& 제외)
-                if match.start() > last_pos:
-                    between_text = expr[last_pos:match.start()]
-                    # & 기호와 공백은 무시
-                    cleaned = between_text.replace('&', '').strip()
-                    if cleaned:
-                        # & 외의 다른 텍스트가 있으면 처리 불가
-                        pass
-
                 last_pos = match.end()
 
                 # 변수
@@ -579,50 +619,102 @@ class CallsignManager:
 
             return ''.join(parts)
 
-        def process_fallback(match) -> str:
-            """[A/B/C] 형식의 폴백 처리 (따옴표 안의 / 무시)"""
-            content = match.group(1)
-
-            # 스마트 분할: 따옴표 안의 /는 무시
-            import re
+        def split_by_slash(content: str) -> list:
+            """따옴표 안의 /는 무시하고 / 기준으로 분할"""
             options = []
             current = []
             in_quote = None
 
-            i = 0
-            while i < len(content):
-                char = content[i]
-
-                # 따옴표 시작/종료
+            for char in content:
                 if char in ('"', "'"):
                     if in_quote is None:
                         in_quote = char
-                        current.append(char)
                     elif in_quote == char:
                         in_quote = None
-                        current.append(char)
-                    else:
-                        current.append(char)
-                # 따옴표 밖의 / → 구분자
+                    current.append(char)
                 elif char == '/' and in_quote is None:
                     options.append(''.join(current))
                     current = []
                 else:
                     current.append(char)
 
-                i += 1
-
-            # 마지막 옵션 추가
             if current or not options:
                 options.append(''.join(current))
 
-            # 각 옵션을 순서대로 시도
+            return options
+
+        def process_fallback(match) -> str:
+            """[A/B/C], [A/and/B/C], [A/or/B/C] 형식 처리
+
+            - [A/B/C] - 기본 폴백: A → B → C 순서대로 시도
+            - [A/and/B/C] - AND: A와 B 모두 있으면 AB 출력, 아니면 C로 폴백
+            - [A/or/B/C] - OR: A와 B 중 하나라도 있으면 있는 것만 출력, 둘 다 없으면 C로 폴백
+            """
+            content = match.group(1)
+            options = split_by_slash(content)
+
+            # /and/ 또는 /or/ 연산자 감지
+            operator = None
+            op_indices = []
+            for i, opt in enumerate(options):
+                stripped = opt.strip().lower()
+                if stripped in ('and', 'or'):
+                    if operator is None:
+                        operator = stripped
+                    elif stripped != operator:
+                        # 혼합 연산자 → 일반 폴백으로 처리
+                        operator = None
+                        op_indices = []
+                        break
+                    op_indices.append(i)
+
+            if operator and op_indices:
+                # 연산자 기준으로 피연산자와 폴백 분리
+                last_op = op_indices[-1]
+                # 피연산자: 연산자 사이사이에 있는 항목들 (0 ~ last_op+1)
+                operands = [options[i] for i in range(last_op + 2) if i not in op_indices]
+                # 폴백: 마지막 연산자 뒤의 피연산자 이후 항목들
+                fallbacks = options[last_op + 2:]
+
+                # 각 피연산자 평가
+                results = []
+                all_resolved = True
+                for operand in operands:
+                    result = evaluate_expression(operand.strip())
+                    if result:
+                        results.append(result)
+                    else:
+                        all_resolved = False
+                        if operator == 'and':
+                            break
+
+                if operator == 'and':
+                    if all_resolved:
+                        return ''.join(results)
+                    # 하나라도 실패 → 폴백
+                    for fb in fallbacks:
+                        result = evaluate_expression(fb.strip())
+                        if result:
+                            return result
+                    return ''
+
+                elif operator == 'or':
+                    if results:
+                        # 하나라도 성공 → 성공한 것들만 출력
+                        return ''.join(results)
+                    # 전부 실패 → 폴백
+                    for fb in fallbacks:
+                        result = evaluate_expression(fb.strip())
+                        if result:
+                            return result
+                    return ''
+
+            # 일반 폴백: 각 옵션을 순서대로 시도
             for option in options:
                 result = evaluate_expression(option.strip())
                 if result:
                     return result
 
-            # 모든 옵션 실패 시 빈 문자열
             return ''
 
         # [A/B/C] 형식의 폴백 처리 (따옴표 안의 [] 무시)

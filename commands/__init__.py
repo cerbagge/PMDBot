@@ -6,6 +6,16 @@ import discord
 from discord import app_commands
 from typing import Dict, List
 
+
+def safe_print(msg):
+    """유니코드 문자 출력 오류 방지용 print 함수"""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        # 유니코드 문자를 ASCII로 대체
+        print(msg.encode('ascii', errors='replace').decode('ascii'))
+
+
 class CommandLoader:
     """명령어를 자동으로 로드하고 등록하는 클래스"""
 
@@ -36,22 +46,22 @@ class CommandLoader:
 
                         # setup 함수가 있으면 호출
                         if hasattr(module, 'setup'):
-                            print(f"  ✅ 명령어 로드: {full_module_path}")
                             module.setup(self.bot)
+                            safe_print(f"  [OK] 명령어 로드: {full_module_path}")
                             self.commands[full_module_path] = module
 
                         # message_handler 함수가 있으면 등록
                         if hasattr(module, 'message_handler'):
-                            print(f"  📨 메시지 핸들러 등록: {full_module_path}")
+                            safe_print(f"  [MSG] 메시지 핸들러 등록: {full_module_path}")
                             self.message_handlers.append(module.message_handler)
 
                     except Exception as e:
-                        print(f"  ❌ 명령어 로드 실패 ({full_module_path}): {e}")
+                        safe_print(f"  [FAIL] 명령어 로드 실패 ({full_module_path}): {e}")
                         import traceback
                         traceback.print_exc()
 
-        print(f"✅ 총 {len(self.commands)}개 명령어 모듈 로드됨")
-        print(f"✅ 총 {len(self.message_handlers)}개 메시지 핸들러 등록됨")
+        safe_print(f"[OK] 총 {len(self.commands)}개 명령어 모듈 로드됨")
+        safe_print(f"[OK] 총 {len(self.message_handlers)}개 메시지 핸들러 등록됨")
 
     async def handle_message(self, message):
         """등록된 모든 메시지 핸들러 실행"""

@@ -22,7 +22,7 @@ def setup(bot):
     async def 자동실행시작(interaction: discord.Interaction):
         """자동 실행을 수동으로 시작"""
         try:
-            from scheduler import execute_auto_role_assignment
+            from scheduler import manual_execute_auto_roles
 
             embed = discord.Embed(
                 title="🔄 자동 실행 시작",
@@ -32,7 +32,7 @@ def setup(bot):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
             # 자동 실행 함수 호출
-            await execute_auto_role_assignment(bot)
+            await manual_execute_auto_roles(bot)
 
             # 완료 메시지
             complete_embed = discord.Embed(

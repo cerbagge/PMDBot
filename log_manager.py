@@ -1,32 +1,13 @@
-# log_manager.py - 디스코드 봇 로그 관리 시스템 (SQLite/PostgreSQL 지원)
+# log_manager.py - 디스코드 봇 로그 관리 시스템 (PostgreSQL / SQLite)
 
 import os
 import json
-import sqlite3
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from enum import Enum
 from collections import deque
 from contextlib import contextmanager
-from db_config.database import (
-    is_sqlite, is_postgresql, get_db_info,
-    get_sqlite_log_db_path, get_log_connection_params
-)
-
-# PostgreSQL 지원 (선택적)
-try:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    HAS_PSYCOPG2 = True
-except ImportError:
-    HAS_PSYCOPG2 = False
-
-
-def dict_factory(cursor, row):
-    """SQLite용 딕셔너리 팩토리"""
-    fields = [column[0] for column in cursor.description]
-    return {key: value for key, value in zip(fields, row)}
-
+from db_config.db_adapter import create_adapter
 
 class LogLevel(Enum):
     """로그 레벨"""
@@ -51,20 +32,13 @@ class LogCategory(Enum):
 
 
 class LogManager:
-    """로그 관리 클래스 (SQLite/PostgreSQL 지원)"""
+    """로그 관리 클래스 (PostgreSQL / SQLite)"""
 
     def __init__(self):
         """
         로그 관리자 초기화
         """
-        self.use_sqlite = is_sqlite()
-
-        if self.use_sqlite:
-            self.db_path = get_sqlite_log_db_path()
-        else:
-            if not HAS_PSYCOPG2:
-                raise ImportError("PostgreSQL을 사용하려면 psycopg2를 설치하세요: pip install psycopg2-binary")
-            self.conn_params = get_log_connection_params()
+        self.adapter = create_adapter(log=True)
 
         # 메모리 내 최근 로그 (빠른 조회용)
         self.recent_logs = deque(maxlen=1000)
@@ -76,56 +50,32 @@ class LogManager:
         self._load_recent_logs()
 
         try:
-            print(f"[OK] 로그 관리자 초기화 완료: {get_db_info()}")
+            print(f"[OK] 로그 관리자 초기화 완료: {self.adapter.get_db_label()}")
         except UnicodeEncodeError:
-            print(f"[OK] Log Manager Initialized")
-
-    def _get_placeholder(self) -> str:
-        """SQL 플레이스홀더 반환"""
-        return "?" if self.use_sqlite else "%s"
+            print(f"[OK] Log Manager Initialized: {self.adapter.get_db_label()}")
 
     def _init_database(self):
         """데이터베이스 및 테이블 초기화"""
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-
-                if self.use_sqlite:
-                    cursor.execute('''
-                        CREATE TABLE IF NOT EXISTS logs (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            time TEXT NOT NULL,
-                            timestamp REAL NOT NULL,
-                            level TEXT NOT NULL,
-                            category TEXT NOT NULL,
-                            message TEXT NOT NULL,
-                            user_id INTEGER,
-                            user_name TEXT,
-                            target_user_id INTEGER,
-                            target_user_name TEXT,
-                            command TEXT,
-                            details TEXT,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                    ''')
-                else:
-                    cursor.execute('''
-                        CREATE TABLE IF NOT EXISTS logs (
-                            id SERIAL PRIMARY KEY,
-                            time TEXT NOT NULL,
-                            timestamp DOUBLE PRECISION NOT NULL,
-                            level TEXT NOT NULL,
-                            category TEXT NOT NULL,
-                            message TEXT NOT NULL,
-                            user_id BIGINT,
-                            user_name TEXT,
-                            target_user_id BIGINT,
-                            target_user_name TEXT,
-                            command TEXT,
-                            details TEXT,
-                            created_at TIMESTAMP DEFAULT NOW()
-                        )
-                    ''')
+                cursor.execute(self.adapter.adapt_ddl('''
+                    CREATE TABLE IF NOT EXISTS logs (
+                        id SERIAL PRIMARY KEY,
+                        time TEXT NOT NULL,
+                        timestamp DOUBLE PRECISION NOT NULL,
+                        level TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        message TEXT NOT NULL,
+                        user_id BIGINT,
+                        user_name TEXT,
+                        target_user_id BIGINT,
+                        target_user_name TEXT,
+                        command TEXT,
+                        details TEXT,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                '''))
 
                 # 인덱스 생성 (조회 성능 향상)
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON logs(timestamp DESC)')
@@ -145,33 +95,26 @@ class LogManager:
     @contextmanager
     def _get_db_connection(self):
         """데이터베이스 연결 컨텍스트 매니저"""
-        if self.use_sqlite:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = dict_factory
-        else:
-            conn = psycopg2.connect(**self.conn_params)
+        conn = self.adapter.get_connection()
         try:
             yield conn
         finally:
             conn.close()
 
     def _get_cursor(self, conn):
-        """커서 생성 (PostgreSQL은 RealDictCursor 사용)"""
-        if self.use_sqlite:
-            return conn.cursor()
-        else:
-            return conn.cursor(cursor_factory=RealDictCursor)
+        """커서 생성 (dict 결과를 반환하는 커서)"""
+        return self.adapter.get_dict_cursor(conn)
 
     def _load_recent_logs(self):
         """최근 1000개 로그를 메모리에 로드"""
         try:
             with self._get_db_connection() as conn:
-                cursor = self._get_cursor(conn)
-                cursor.execute('''
+                cursor = self.adapter.get_dict_cursor(conn)
+                cursor.execute(self.adapter.adapt_sql('''
                     SELECT * FROM logs
                     ORDER BY timestamp DESC
                     LIMIT 1000
-                ''')
+                '''))
 
                 rows = cursor.fetchall()
 
@@ -187,7 +130,7 @@ class LogManager:
                 print(f"[ERROR] Failed to load recent logs: {e}")
 
     def _row_to_dict(self, row) -> Dict:
-        """Row를 딕셔너리로 변환"""
+        """DB Row를 딕셔너리로 변환"""
         r = dict(row) if not isinstance(row, dict) else row
         return {
             "id": r.get("id"),
@@ -235,7 +178,7 @@ class LogManager:
         """
         try:
             now = datetime.now()
-            ph = self._get_placeholder()
+
 
             log_entry = {
                 "time": now.strftime('%Y-%m-%d %H:%M:%S'),
@@ -257,12 +200,12 @@ class LogManager:
             # 데이터베이스에 저장
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(f'''
+                cursor.execute(self.adapter.adapt_sql('''
                     INSERT INTO logs
                     (time, timestamp, level, category, message, user_id, user_name,
                      target_user_id, target_user_name, command, details)
-                    VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
-                ''', (
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                '''), (
                     log_entry["time"],
                     log_entry["timestamp"],
                     log_entry["level"],
@@ -317,27 +260,26 @@ class LogManager:
         """
         try:
             with self._get_db_connection() as conn:
-                cursor = self._get_cursor(conn)
-                ph = self._get_placeholder()
+                cursor = self.adapter.get_dict_cursor(conn)
 
                 # 날짜 범위 계산
                 start_time = datetime.strptime(date, '%Y-%m-%d')
                 end_time = start_time + timedelta(days=1)
 
                 if category:
-                    cursor.execute(f'''
+                    cursor.execute(self.adapter.adapt_sql('''
                         SELECT * FROM logs
-                        WHERE time >= {ph} AND time < {ph} AND category = {ph}
+                        WHERE time >= %s AND time < %s AND category = %s
                         ORDER BY timestamp ASC
-                    ''', (start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    '''), (start_time.strftime('%Y-%m-%d %H:%M:%S'),
                           end_time.strftime('%Y-%m-%d %H:%M:%S'),
                           category.value))
                 else:
-                    cursor.execute(f'''
+                    cursor.execute(self.adapter.adapt_sql('''
                         SELECT * FROM logs
-                        WHERE time >= {ph} AND time < {ph}
+                        WHERE time >= %s AND time < %s
                         ORDER BY timestamp ASC
-                    ''', (start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    '''), (start_time.strftime('%Y-%m-%d %H:%M:%S'),
                           end_time.strftime('%Y-%m-%d %H:%M:%S')))
 
                 rows = cursor.fetchall()
@@ -363,18 +305,17 @@ class LogManager:
         """
         try:
             with self._get_db_connection() as conn:
-                cursor = self._get_cursor(conn)
-                ph = self._get_placeholder()
+                cursor = self.adapter.get_dict_cursor(conn)
 
                 # 날짜 범위 계산
                 start_date = datetime.now() - timedelta(days=days)
 
-                cursor.execute(f'''
+                cursor.execute(self.adapter.adapt_sql('''
                     SELECT * FROM logs
-                    WHERE (user_id = {ph} OR target_user_id = {ph})
-                    AND timestamp >= {ph}
+                    WHERE (user_id = %s OR target_user_id = %s)
+                    AND timestamp >= %s
                     ORDER BY timestamp DESC
-                ''', (user_id, user_id, start_date.timestamp()))
+                '''), (user_id, user_id, start_date.timestamp()))
 
                 rows = cursor.fetchall()
                 return [self._row_to_dict(row) for row in rows]
@@ -404,18 +345,17 @@ class LogManager:
             os.makedirs(log_dir, exist_ok=True)
 
             with self._get_db_connection() as conn:
-                cursor = self._get_cursor(conn)
-                ph = self._get_placeholder()
+                cursor = self.adapter.get_dict_cursor(conn)
 
                 # 날짜 범위 계산
                 start = datetime.strptime(start_date, '%Y-%m-%d')
                 end = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)
 
-                cursor.execute(f'''
+                cursor.execute(self.adapter.adapt_sql('''
                     SELECT * FROM logs
-                    WHERE time >= {ph} AND time < {ph}
+                    WHERE time >= %s AND time < %s
                     ORDER BY timestamp ASC
-                ''', (start.strftime('%Y-%m-%d %H:%M:%S'),
+                '''), (start.strftime('%Y-%m-%d %H:%M:%S'),
                       end.strftime('%Y-%m-%d %H:%M:%S')))
 
                 rows = cursor.fetchall()
@@ -465,22 +405,18 @@ class LogManager:
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                ph = self._get_placeholder()
+    
 
                 # 날짜 계산
                 cutoff_date = datetime.now() - timedelta(days=days)
                 cutoff_timestamp = cutoff_date.timestamp()
 
                 # 삭제할 로그 수 조회
-                if self.use_sqlite:
-                    cursor.execute('SELECT COUNT(*) FROM logs WHERE timestamp < ?', (cutoff_timestamp,))
-                    deleted_count = cursor.fetchone()[0]
-                    cursor.execute('DELETE FROM logs WHERE timestamp < ?', (cutoff_timestamp,))
-                else:
-                    cursor.execute('SELECT COUNT(*) FROM logs WHERE timestamp < %s', (cutoff_timestamp,))
-                    deleted_count = cursor.fetchone()[0]
-                    cursor.execute('DELETE FROM logs WHERE timestamp < %s', (cutoff_timestamp,))
+                cursor.execute(self.adapter.adapt_sql('SELECT COUNT(*) FROM logs WHERE timestamp < %s'), (cutoff_timestamp,))
+                deleted_count = cursor.fetchone()[0]
 
+                # 오래된 로그 삭제
+                cursor.execute(self.adapter.adapt_sql('DELETE FROM logs WHERE timestamp < %s'), (cutoff_timestamp,))
                 conn.commit()
 
                 if deleted_count > 0:
@@ -542,11 +478,8 @@ class LogManager:
         try:
             with self._get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT COUNT(*) FROM logs')
-                result = cursor.fetchone()
-                if isinstance(result, dict):
-                    return result.get('COUNT(*)', 0)
-                return result[0] if result else 0
+                cursor.execute(self.adapter.adapt_sql('SELECT COUNT(*) FROM logs'))
+                return cursor.fetchone()[0]
         except Exception as e:
             try:
                 print(f"[ERROR] 로그 개수 조회 실패: {e}")

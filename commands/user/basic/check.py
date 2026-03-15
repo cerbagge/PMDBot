@@ -48,13 +48,45 @@ def setup(bot):
                 town = result.get('town', 'Unknown')
                 mc_id = result.get('mc_id', 'Unknown')
                 role_changes = result.get('role_changes', [])
+                is_incomplete = result.get('incomplete', False)
+
+                # 국가/마을 정보가 불완전한 경우
+                if is_incomplete:
+                    embed = discord.Embed(
+                        title="⚠️ 국가/마을 정보 없음",
+                        description="게임 내에서 만약 국가/마을에 가입을 했으면 ``/확인``을 쳐서 재인증 해주세요.",
+                        color=0xff6600
+                    )
+
+                    # 마인크래프트 정보
+                    mc_info = f"**닉네임:** ``{mc_id}``"
+                    if town and town not in ["❌", "무소속"]:
+                        mc_info += f"\n**마을:** ``{town}``"
+                    else:
+                        mc_info += f"\n**마을:** 없음"
+                    if nation and nation not in ["❌", "무소속"]:
+                        mc_info += f"\n**국가:** ``{nation}``"
+                    else:
+                        mc_info += f"\n**국가:** 없음"
+
+                    embed.add_field(
+                        name="🎮 마인크래프트 정보",
+                        value=mc_info,
+                        inline=False
+                    )
 
                 # 국가에 따른 메시지 생성
-                if nation == BASE_NATION:
+                elif nation == BASE_NATION:
                     embed = discord.Embed(
                         title="✅ 국민 확인 완료",
                         description=f"**``{BASE_NATION}``** 국민으로 확인되었습니다!",
                         color=0x00ff00
+                    )
+
+                    embed.add_field(
+                        name="🎮 마인크래프트 정보",
+                        value=f"**닉네임:** ``{mc_id}``\n**마을:** ``{town}``\n**국가:** ``{nation}``",
+                        inline=False
                     )
                 else:
                     embed = discord.Embed(
@@ -63,12 +95,11 @@ def setup(bot):
                         color=0xff9900
                     )
 
-                # 마인크래프트 정보
-                embed.add_field(
-                    name="🎮 마인크래프트 정보",
-                    value=f"**닉네임:** ``{mc_id}``\n**마을:** ``{town}``\n**국가:** ``{nation}``",
-                    inline=False
-                )
+                    embed.add_field(
+                        name="🎮 마인크래프트 정보",
+                        value=f"**닉네임:** ``{mc_id}``\n**마을:** ``{town}``\n**국가:** ``{nation}``",
+                        inline=False
+                    )
 
                 # 변경 사항
                 if role_changes:

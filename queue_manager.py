@@ -51,6 +51,36 @@ class QueueManager:
             self.queues[min_idx].insert(0, user_id)
             return True
 
+    def add_user_back(self, user_id: int):
+        """사용자를 가장 짧은 대기열 맨 뒤에 추가 (UUID 없는 사용자 후순위 처리용, 중복 방지)"""
+        with self._lock:
+            if user_id in self._get_all_users():
+                return False
+
+            min_idx = min(range(self.NUM_QUEUES), key=lambda i: len(self.queues[i]))
+            self.queues[min_idx].append(user_id)
+            return True
+
+    def get_all_and_clear(self, queue_index: int = None) -> list:
+        """대기열에서 모든 사용자를 꺼내고 비우기 (bulk 처리용)
+
+        Args:
+            queue_index: 특정 대기열 인덱스 (None이면 모든 대기열)
+
+        Returns:
+            사용자 ID 리스트
+        """
+        with self._lock:
+            users = []
+            if queue_index is not None and 0 <= queue_index < self.NUM_QUEUES:
+                users = list(self.queues[queue_index])
+                self.queues[queue_index].clear()
+            else:
+                for q in self.queues:
+                    users.extend(q)
+                    q.clear()
+            return users
+
     def get_next(self, queue_index: int = 0):
         """특정 대기열에서 다음 사용자 가져오기"""
         with self._lock:

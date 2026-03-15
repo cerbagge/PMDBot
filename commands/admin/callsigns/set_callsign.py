@@ -4,7 +4,7 @@
 import discord
 from discord import app_commands
 import aiohttp
-import time
+import asyncio
 import os
 
 # 안전한 import 처리
@@ -96,92 +96,116 @@ def setup(bot):
         applied_format = None
 
         try:
-            # API를 통해 마크 ID와 국가 정보 조회
-            async with aiohttp.ClientSession() as session:
-                # 1단계: 디스코드 ID → 마크 ID
-                url1 = f"{MC_API_BASE}/discord?discord={discord_id}"
-                async with session.get(url1, timeout=aiohttp.ClientTimeout(total=10)) as r1:
-                    if r1.status == 200:
-                        data1 = await r1.json()
-                        if data1.get('data') and data1['data']:
-                            mc_id = data1['data'][0].get('name')
-                            mc_uuid = data1['data'][0].get('uuid')
+            mc_uuid = None
 
-                            # 데이터베이스에 저장 (UUID와 Minecraft 닉네임)
-                            if DATABASE_ENABLED and db_manager and mc_id and mc_uuid:
-                                try:
-                                    db_manager.add_or_update_user(
-                                        discord_id=discord_id,
-                                        minecraft_uuid=mc_uuid,
-                                        minecraft_name=mc_id
-                                    )
-                                    print(f"  💾 데이터베이스 저장: {mc_id} (UUID: {mc_uuid[:8]}...)")
-                                except Exception as db_error:
-                                    print(f"  ⚠️ 데이터베이스 저장 실패: {db_error}")
+            # === 1단계: mc_id 조회 (DB 캐시 → API 폴백) ===
+            # DB에서 먼저 조회
+            if DATABASE_ENABLED and db_manager:
+                try:
+                    user_info = db_manager.get_user_info(discord_id)
+                    if user_info:
+                        mc_id = user_info.get('current_minecraft_name')
+                        mc_uuid = user_info.get('minecraft_uuid')
+                        if mc_id:
+                            print(f"  ⚡ DB 캐시에서 mc_id 조회: {mc_id}")
+                except Exception:
+                    pass
 
-                            if mc_id:
-                                time.sleep(2)
+            # DB에 없으면 API 호출
+            if not mc_id:
+                async with aiohttp.ClientSession() as session:
+                    url1 = f"{MC_API_BASE}/discord?discord={discord_id}"
+                    async with session.get(url1, timeout=aiohttp.ClientTimeout(total=5)) as r1:
+                        if r1.status == 200:
+                            data1 = await r1.json()
+                            if data1.get('data') and data1['data']:
+                                mc_id = data1['data'][0].get('name')
+                                mc_uuid = data1['data'][0].get('uuid')
 
-                                # 2단계: 마크 ID → 마을
-                                url2 = f"{MC_API_BASE}/resident?name={mc_id}"
-                                async with session.get(url2, timeout=aiohttp.ClientTimeout(total=10)) as r2:
-                                    if r2.status == 200:
-                                        data2 = await r2.json()
-                                        if data2.get('data') and data2['data']:
-                                            town = data2['data'][0].get('town')
-                                            if town:
-                                                time.sleep(2)
+                                # DB에 저장
+                                if DATABASE_ENABLED and db_manager and mc_id and mc_uuid:
+                                    try:
+                                        db_manager.add_or_update_user(
+                                            discord_id=discord_id,
+                                            minecraft_uuid=mc_uuid,
+                                            minecraft_name=mc_id
+                                        )
+                                    except Exception:
+                                        pass
 
-                                                # 3단계: 마을 → 국가
-                                                url3 = f"{MC_API_BASE}/town?name={town}"
-                                                async with session.get(url3, timeout=aiohttp.ClientTimeout(total=10)) as r3:
-                                                    if r3.status == 200:
-                                                        data3 = await r3.json()
-                                                        if data3.get('data') and data3['data']:
-                                                            nation = data3['data'][0].get('nation')
+            if mc_id:
+                # === 2단계: town/nation 조회 (bulk 캐시 → API 폴백) ===
+                # bulk_updater 캐시에서 먼저 조회 (town + nation 한번에)
+                bulk_mgr = getattr(interaction.client, 'bulk_data_manager', None)
+                if bulk_mgr:
+                    resident_data = bulk_mgr.get_resident_by_name(mc_id)
+                    if resident_data:
+                        town = resident_data.get('town') or None
+                        nation = resident_data.get('nation') or None
+                        if town or nation:
+                            print(f"  ⚡ Bulk 캐시에서 조회: town={town}, nation={nation}")
 
-                                                            # BASE_NATION 국민인 경우에만 콜사인 적용
-                                                            if nation == BASE_NATION:
-                                                                # 역할별 양식 확인 (가장 높은 우선순위 역할)
-                                                                role_format = None
-                                                                if isinstance(member, discord.Member):
-                                                                    # 역할 우선순위 순으로 정렬 (position이 높을수록 우선순위가 높음)
-                                                                    sorted_roles = sorted(member.roles, key=lambda r: r.position, reverse=True)
-                                                                    for role in sorted_roles:
-                                                                        format_str = callsign_manager.get_role_format(role.id)
-                                                                        if format_str:
-                                                                            role_format = format_str
-                                                                            applied_format = f"{role.name} 역할 양식"
-                                                                            print(f"  🎭 역할 양식 적용: {role.name} - {format_str}")
-                                                                            break
+                # 캐시에 없으면 API 호출 (resident API가 town+nation 둘 다 반환)
+                if not nation:
+                    async with aiohttp.ClientSession() as session:
+                        url2 = f"{MC_API_BASE}/resident?name={mc_id}"
+                        async with session.get(url2, timeout=aiohttp.ClientTimeout(total=5)) as r2:
+                            if r2.status == 200:
+                                data2 = await r2.json()
+                                if data2.get('data') and data2['data']:
+                                    town = data2['data'][0].get('town')
+                                    nation = data2['data'][0].get('nation')
 
-                                                                # 닉네임 생성
-                                                                if role_format:
-                                                                    # 역할 양식이 있으면 양식 적용
-                                                                    new_nickname = callsign_manager.apply_format_to_nickname(
-                                                                        role_format,
-                                                                        mc_id=mc_id,
-                                                                        nation=nation,
-                                                                        town=town,
-                                                                        callsign=텍스트
-                                                                    )
-                                                                else:
-                                                                    # 기본 양식 사용
-                                                                    new_nickname = f"{mc_id} ㅣ {텍스트}"
+                                    # resident API에 nation이 없으면 town → nation 조회
+                                    if town and not nation:
+                                        url3 = f"{MC_API_BASE}/town?name={town}"
+                                        async with session.get(url3, timeout=aiohttp.ClientTimeout(total=5)) as r3:
+                                            if r3.status == 200:
+                                                data3 = await r3.json()
+                                                if data3.get('data') and data3['data']:
+                                                    nation = data3['data'][0].get('nation')
 
-                                                                # 닉네임 변경 시도
-                                                                try:
-                                                                    await member.edit(nick=new_nickname)
-                                                                    nickname_updated = True
-                                                                    print(f"✅ 콜사인 적용으로 닉네임 변경: {new_nickname}")
-                                                                except discord.Forbidden:
-                                                                    nickname_error = "닉네임 변경 권한이 없습니다."
-                                                                    print(f"⚠️ 닉네임 변경 권한 없음")
-                                                                except Exception as e:
-                                                                    nickname_error = f"닉네임 변경 실패: {str(e)[:50]}"
-                                                                    print(f"⚠️ 닉네임 변경 실패: {e}")
-                                                            else:
-                                                                nickname_error = f"{BASE_NATION} 국민만 콜사인을 사용할 수 있습니다."
+                # === 3단계: 닉네임 변경 ===
+                if nation == BASE_NATION:
+                    # 역할별 양식 확인 (가장 높은 우선순위 역할)
+                    role_format = None
+                    if isinstance(member, discord.Member):
+                        sorted_roles = sorted(member.roles, key=lambda r: r.position, reverse=True)
+                        for role in sorted_roles:
+                            format_str = callsign_manager.get_role_format(role.id)
+                            if format_str:
+                                role_format = format_str
+                                applied_format = f"{role.name} 역할 양식"
+                                print(f"  🎭 역할 양식 적용: {role.name} - {format_str}")
+                                break
+
+                    # 닉네임 생성
+                    if role_format:
+                        new_nickname = callsign_manager.apply_format_to_nickname(
+                            role_format,
+                            mc_id=mc_id,
+                            nation=nation,
+                            town=town,
+                            callsign=텍스트,
+                            discord_joined_at=member.joined_at
+                        )
+                    else:
+                        new_nickname = f"{mc_id} ㅣ {텍스트}"
+
+                    # 닉네임 변경 시도
+                    try:
+                        await member.edit(nick=new_nickname)
+                        nickname_updated = True
+                        print(f"✅ 콜사인 적용으로 닉네임 변경: {new_nickname}")
+                    except discord.Forbidden:
+                        nickname_error = "닉네임 변경 권한이 없습니다."
+                        print(f"⚠️ 닉네임 변경 권한 없음")
+                    except Exception as e:
+                        nickname_error = f"닉네임 변경 실패: {str(e)[:50]}"
+                        print(f"⚠️ 닉네임 변경 실패: {e}")
+                elif nation:
+                    nickname_error = f"{BASE_NATION} 국민만 콜사인을 사용할 수 있습니다."
+
         except Exception as e:
             print(f"⚠️ 콜사인 즉시 적용 중 오류: {e}")
             nickname_error = "마인크래프트 계정 정보를 확인할 수 없습니다."
