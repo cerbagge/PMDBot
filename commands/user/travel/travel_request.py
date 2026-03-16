@@ -6,6 +6,11 @@ from discord import app_commands, ui
 from datetime import datetime, date
 import re
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 
 class TravelRequestModal(ui.Modal, title="여행 신청"):
     """여행 신청 모달 - BASE_NATION 국민용 (목적지 국가 + 날짜)"""
@@ -1130,6 +1135,9 @@ def setup(bot):
     async def 여행신청(interaction: discord.Interaction):
         """여행 신청 명령어"""
         await interaction.response.defer(ephemeral=True)
+
+        if bot_logger:
+            bot_logger.log_command("여행신청", interaction.user.id, interaction.user.name, source="user_command", category=LogCategory.TRAVEL)
 
         try:
             from travel_manager import travel_manager, travel_config_manager

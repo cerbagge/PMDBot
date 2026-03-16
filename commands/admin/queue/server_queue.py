@@ -8,6 +8,11 @@ import asyncio
 import json
 import datetime
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 
 # ========== 서버 대기열 확인 기능 ==========
 class ServerQueueChecker:
@@ -113,6 +118,10 @@ def setup(bot):
     async def 서버대기열(interaction: discord.Interaction):
         """서버 대기열 확인 슬래시 커맨드"""
         await interaction.response.defer()
+
+        if bot_logger:
+            bot_logger.log_command("서버대기열", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.COMMAND)
 
         try:
             # ServerQueueChecker 인스턴스 생성

@@ -5,6 +5,11 @@ import discord
 from discord import app_commands
 from typing import Literal
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 관리자 권한 체크
 def is_admin(interaction: discord.Interaction) -> bool:
     CALLSIGN_MANAGER_ROLE_ID = 1448131353890783359
@@ -40,6 +45,11 @@ def setup(bot):
     ):
         """뉴비 알림 설정"""
         await interaction.response.defer(ephemeral=True)
+
+        if bot_logger:
+            bot_logger.log_command("뉴비설정", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.SCHEDULER,
+                                   details={"기능": 기능.value})
 
         try:
             from newbie_config_manager import newbie_config_manager

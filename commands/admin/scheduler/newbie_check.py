@@ -5,6 +5,11 @@ import discord
 from discord import app_commands
 from datetime import datetime
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 관리자 권한 체크
 def is_admin(interaction: discord.Interaction) -> bool:
     CALLSIGN_MANAGER_ROLE_ID = 1448131353890783359
@@ -158,6 +163,10 @@ def setup(bot):
     async def 뉴비확인(interaction: discord.Interaction):
         """뉴비 목록 확인"""
         await interaction.response.defer()
+
+        if bot_logger:
+            bot_logger.log_command("뉴비확인", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.COMMAND)
 
         try:
             from newbie_config_manager import newbie_config_manager

@@ -279,8 +279,8 @@ class BulkDataManager:
                         town_uuid=town_uuid
                     )
 
-                    # 변경사항이 있으면 Discord 업데이트 대기열에 추가
-                    if name_changed or nation_changed:
+                    # 변경사항이 있으면 Discord 업데이트 대기열에 추가 (마을 변경 포함)
+                    if name_changed or nation_changed or town_changed:
                         # joinedTownAt을 bulk 데이터에서 가져옴 (0이면 None 처리)
                         _joined_town_at = resident.get('joinedTownAt')
                         if _joined_town_at == 0:
@@ -294,8 +294,15 @@ class BulkDataManager:
                             'new_nation_uuid': nation_uuid,
                             'old_nation': old_nation,
                             'old_nation_uuid': old_nation_uuid,
+                            'new_town': town,
+                            'new_town_uuid': town_uuid,
+                            'old_town': old_town,
+                            'old_town_uuid': old_town_uuid,
                             'name_changed': name_changed,
                             'nation_changed': nation_changed,
+                            'town_changed': town_changed,
+                            'nation_ranks': nation_ranks,
+                            'town_ranks': town_ranks,
                             'joined_town_at': _joined_town_at
                         })
 
@@ -777,7 +784,7 @@ class BulkDataManager:
                                 role_format,
                                 mc_id=new_mc_name,
                                 nation=new_nation,
-                                town=None,
+                                town=update.get('new_town'),
                                 callsign=callsign,
                                 discord_joined_at=member.joined_at
                             )
@@ -1016,6 +1023,87 @@ class BulkDataManager:
                                     await update_newbie_list_message(self._bot)
                                 except Exception as e:
                                     print(f"  [WARN] 뉴비 목록 업데이트 실패: {e}")
+
+                    # 3. 마을 변경 시 역할 처리
+                    if update.get('town_changed'):
+                        new_town = update.get('new_town')
+                        old_town = update.get('old_town')
+
+                        # 여행 중인 사용자는 역할 변경 건너뛰기
+                        if TRAVEL_ENABLED and is_user_traveling(discord_id):
+                            print(f"  [TRAVEL] {member.name}: 여행 중 - 마을 역할 변경 건너뛰기")
+                        else:
+                            try:
+                                from town_role_manager import town_role_manager as _trm
+                                if _trm:
+                                    # 이전 마을 역할 제거
+                                    all_mapped_towns = _trm.get_all_mappings_flat()
+                                    for mapping in all_mapped_towns:
+                                        mapped_town = mapping['town_name']
+                                        mapped_role_id = mapping['role_id']
+                                        if mapped_town != new_town:
+                                            mapped_role = guild.get_role(mapped_role_id)
+                                            if mapped_role and mapped_role in member.roles:
+                                                await member.remove_roles(mapped_role)
+                                                print(f"  [TOWN] {member.name}: {mapped_town} 마을 역할 제거 (마을 변경)")
+                                                updates_processed += 1
+
+                                    # 새 마을 역할 부여
+                                    if new_town and new_town not in ("무소속", "❌"):
+                                        role_id = _trm.get_role_id_by_name(new_town)
+                                        if role_id:
+                                            town_role = guild.get_role(role_id)
+                                            if town_role and town_role not in member.roles:
+                                                await member.add_roles(town_role)
+                                                print(f"  [TOWN] {member.name}: {new_town} 마을 역할 부여")
+                                                updates_processed += 1
+                            except ImportError:
+                                pass
+                            except Exception as e:
+                                print(f"  [FAIL] {member.name} 마을 역할 처리 실패: {e}")
+                                updates_failed += 1
+
+                        # 마을 변경 시 닉네임도 갱신 (양식에 마을 포함될 수 있음)
+                        if not update.get('name_changed'):
+                            try:
+                                mc_name = update['new_name']
+                                new_nation = update.get('new_nation')
+
+                                role_format = None
+                                if callsign_manager:
+                                    sorted_roles = sorted(member.roles, key=lambda r: r.position, reverse=True)
+                                    for role in sorted_roles:
+                                        format_str = callsign_manager.get_role_format(role.id)
+                                        if format_str:
+                                            role_format = format_str
+                                            break
+
+                                callsign = callsign_manager.get_callsign(discord_id) if callsign_manager else None
+
+                                if role_format and callsign_manager:
+                                    new_nick = callsign_manager.apply_format_to_nickname(
+                                        role_format,
+                                        mc_id=mc_name,
+                                        nation=new_nation,
+                                        town=new_town,
+                                        callsign=callsign,
+                                        discord_joined_at=member.joined_at
+                                    )
+                                elif callsign:
+                                    new_nick = f"{mc_name} | {callsign}"
+                                else:
+                                    new_nick = mc_name
+
+                                if len(new_nick) > 32:
+                                    new_nick = new_nick[:32]
+
+                                if member.nick != new_nick:
+                                    await member.edit(nick=new_nick)
+                                    print(f"  [NICK] {member.name}: {member.nick} -> {new_nick} (마을 변경)")
+                                    updates_processed += 1
+                            except Exception as e:
+                                print(f"  [FAIL] {member.name} 닉네임 갱신 실패 (마을 변경): {e}")
+                                updates_failed += 1
 
                 except Exception as e:
                     print(f"  [ERROR] Discord 업데이트 실패 (ID: {discord_id}): {e}")

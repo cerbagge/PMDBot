@@ -17,6 +17,11 @@ except ImportError:
     queue_manager = DummyQueueManager()
 
 try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
+try:
     from utils import format_estimated_time
 except ImportError:
     def format_estimated_time(count, seconds_per_user=20):
@@ -49,6 +54,10 @@ def setup(bot):
     @app_commands.check(is_admin)
     async def 대기열상태(interaction: discord.Interaction):
         """대기열 상태 확인 명령어"""
+        if bot_logger:
+            bot_logger.log_command("대기열상태", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.COMMAND)
+
         queue_size = queue_manager.get_queue_size()
         is_processing = queue_manager.is_processing()
 

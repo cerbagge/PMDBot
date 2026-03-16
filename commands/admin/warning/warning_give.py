@@ -11,6 +11,11 @@ from commands.admin.warning.warning_manage import (
     check_and_apply_punishment,
 )
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 
 def setup(bot):
     """봇에 /경고 명령어 등록"""
@@ -32,6 +37,12 @@ def setup(bot):
         from database_manager import db_manager
 
         await interaction.response.defer(ephemeral=False)
+
+        if bot_logger:
+            bot_logger.log_command("경고", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.WARNING_SYS,
+                                   details={"대상": 유저.name, "사유": 사유 or "사유 없음"},
+                                   target_user_id=유저.id, target_user_name=유저.name)
 
         guild_id = interaction.guild.id
         reason = 사유 or "사유 없음"

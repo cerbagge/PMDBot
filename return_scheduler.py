@@ -182,8 +182,15 @@ async def send_inactive_dms():
 
         print("[INACTIVE_DM] 잠수 DM 발송 시작")
 
+        # 국민 역할 (외국인 제외)
+        success_role = guild.get_role(config.SUCCESS_ROLE_ID) if config.SUCCESS_ROLE_ID else None
+
         for member in guild.members:
             if member.bot:
+                continue
+
+            # 국민이 아니면 스킵
+            if success_role and success_role not in member.roles:
                 continue
 
             # 잠수 역할이 없으면 스킵

@@ -4,6 +4,11 @@
 import discord
 from discord import app_commands
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 관리자 권한 체크
 def is_admin(interaction: discord.Interaction) -> bool:
     CALLSIGN_MANAGER_ROLE_ID = 1448131353890783359
@@ -21,6 +26,9 @@ def setup(bot):
     @app_commands.check(is_admin)
     async def 스케줄확인(interaction: discord.Interaction):
         """스케줄러 상태 확인"""
+        if bot_logger:
+            bot_logger.log_command("스케줄확인", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.COMMAND)
         try:
             from scheduler import get_scheduler_info
 

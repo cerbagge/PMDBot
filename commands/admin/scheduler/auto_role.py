@@ -4,6 +4,11 @@
 import discord
 from discord import app_commands
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 관리자 권한 체크
 def is_admin(interaction: discord.Interaction) -> bool:
     CALLSIGN_MANAGER_ROLE_ID = 1448131353890783359
@@ -22,6 +27,10 @@ def setup(bot):
     @app_commands.check(is_admin)
     async def 자동실행(interaction: discord.Interaction, 역할id: str):
         """자동실행 역할 추가"""
+        if bot_logger:
+            bot_logger.log_command("자동실행", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.SCHEDULER,
+                                   details={"역할id": 역할id})
         try:
             # 역할 ID 검증
             try:

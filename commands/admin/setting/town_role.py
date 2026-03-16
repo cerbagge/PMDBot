@@ -20,6 +20,11 @@ except ImportError:
     town_role_manager = None
     TOWN_ROLE_ENABLED = False
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 관리자 권한 체크
 def is_admin(interaction: discord.Interaction) -> bool:
     CALLSIGN_MANAGER_ROLE_ID = 1448131353890783359
@@ -501,6 +506,11 @@ def setup(bot):
 
             # 마을이 BASE_NATION에 존재하는지 확인 - 버튼 선택 방식
             await interaction.response.defer(thinking=True)
+
+            if bot_logger:
+                bot_logger.log_command("마을역할", interaction.user.id, interaction.user.name,
+                                       source="admin_command", category=LogCategory.ADMIN,
+                                       details={"기능": 기능})
 
             try:
                 print(f"🔍 마을 검증 시작: {마을} in {BASE_NATION}")

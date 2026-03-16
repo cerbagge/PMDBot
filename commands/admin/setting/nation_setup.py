@@ -5,6 +5,11 @@ import discord
 from discord import app_commands
 import datetime
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 서버 소유자 권한 체크 함수
 def is_owner(interaction: discord.Interaction) -> bool:
     """서버 소유자인지 체크"""
@@ -20,6 +25,11 @@ def setup(bot):
     async def 국가설정(interaction: discord.Interaction, 국가: str):
         """[관리자] 서버 BASE_NATION 설정"""
         await interaction.response.defer()
+
+        if bot_logger:
+            bot_logger.log_command("국가설정", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.ADMIN,
+                                   details={"국가": 국가})
 
         try:
             from config import config

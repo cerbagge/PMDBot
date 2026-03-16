@@ -7,6 +7,11 @@ from typing import Literal
 from datetime import datetime, date
 import re
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 
 # 관리자 권한 체크
 def is_admin(interaction: discord.Interaction) -> bool:
@@ -310,6 +315,11 @@ def setup(bot):
         id: str = None
     ):
         """여행 시스템 관리"""
+        if bot_logger:
+            bot_logger.log_command("여행관리", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.TRAVEL,
+                                   details={"기능": 기능.value})
+
         from travel_manager import travel_manager, travel_config_manager
         from database_manager import db_manager
 

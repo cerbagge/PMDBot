@@ -155,6 +155,13 @@ def setup(bot):
         try:
             await interaction.response.defer()
 
+            try:
+                from log_manager import bot_logger as _bot_logger
+                if _bot_logger:
+                    _bot_logger.log_command("로그관리", interaction.user.id, interaction.user.name, source="admin_command", category=LogCategory.COMMAND, details={"기능": 기능})
+            except ImportError:
+                pass
+
             if 기능 == "통계":
                 # 로그 통계 정보 표시
                 today = datetime.datetime.now().strftime('%Y-%m-%d')

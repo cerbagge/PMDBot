@@ -12,6 +12,11 @@ import discord
 from discord import app_commands
 from datetime import datetime
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 
 def is_admin(interaction: discord.Interaction) -> bool:
     return interaction.user.guild_permissions.administrator
@@ -43,6 +48,11 @@ def setup(bot):
         채널: discord.abc.GuildChannel = None
     ):
         await interaction.response.defer(ephemeral=True)
+
+        if bot_logger:
+            bot_logger.log_command("복귀관리", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.RETURN,
+                                   details={"기능": 기능.value})
 
         try:
             from return_config_manager import return_config_manager

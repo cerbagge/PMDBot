@@ -4,6 +4,11 @@ import os
 import re
 from datetime import datetime
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 
 class ReturnTicketView(discord.ui.View):
     """복귀 신청 버튼 (영구 View)"""
@@ -20,12 +25,27 @@ class ReturnTicketView(discord.ui.View):
     async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
 
+        if bot_logger:
+            bot_logger.log_command("복귀신청", interaction.user.id, interaction.user.name, source="user_command", category=LogCategory.RETURN)
+
         try:
             from return_config_manager import return_config_manager
             from database_manager import db_manager
 
+            from config import config
+
             member = interaction.user
             guild = interaction.guild
+
+            # 국민 역할 확인 (외국인은 복귀 신청 불가)
+            if config.SUCCESS_ROLE_ID:
+                success_role = guild.get_role(config.SUCCESS_ROLE_ID)
+                if success_role and success_role not in member.roles:
+                    await interaction.followup.send(
+                        "❌ 국민만 복귀 신청이 가능합니다.",
+                        ephemeral=True
+                    )
+                    return
 
             # 카테고리 확인
             category_id = return_config_manager.get_ticket_category()
@@ -100,6 +120,15 @@ class ReturnTicketView(discord.ui.View):
                 if role.permissions.administrator:
                     overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
 
+            # 복귀 관리자 역할에도 티켓 채널 접근 권한 부여
+            manager_role_id = return_config_manager.get_manager_role()
+            if manager_role_id:
+                manager_role = guild.get_role(manager_role_id)
+                if manager_role and manager_role not in overwrites:
+                    overwrites[manager_role] = discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True, read_message_history=True
+                    )
+
             # 채널 생성
             ticket_channel = await guild.create_text_channel(
                 name=channel_name,
@@ -154,6 +183,14 @@ class ReturnTicketView(discord.ui.View):
                 ephemeral=True
             )
             print(f"[TICKET] 티켓 생성: {channel_name} (유저: {member.display_name})")
+
+            if bot_logger:
+                bot_logger.log_command(
+                    "복귀티켓생성", member.id, member.name,
+                    source="user_command", category=LogCategory.RETURN,
+                    details={"mc_name": mc_name, "callsign": callsign or "없음",
+                             "last_online_days": last_online_days, "channel": channel_name}
+                )
 
         except Exception as e:
             import traceback
@@ -250,6 +287,14 @@ class CloseTicketView(discord.ui.View):
 
             except Exception as e:
                 print(f"[WARN] 대화 로그 저장 실패: {e}")
+
+        if bot_logger:
+            bot_logger.log_command(
+                "복귀티켓닫기", interaction.user.id, interaction.user.name,
+                source="admin_command", category=LogCategory.RETURN,
+                target_user_id=user_id,
+                details={"channel": interaction.channel.name}
+            )
 
         await asyncio.sleep(3)
         try:

@@ -9,6 +9,12 @@ import os
 MC_API_BASE = os.getenv("MC_API_BASE", "https://api.planetearth.kr")
 
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
+
 def setup(bot):
     """봇에 /resident 명령어 등록"""
 
@@ -16,6 +22,9 @@ def setup(bot):
     @app_commands.describe(name="플레이어 이름을 입력해주세요")
     async def resident_command(interaction: discord.Interaction, name: str):
         await interaction.response.defer()
+
+        if bot_logger:
+            bot_logger.log_command("resident", interaction.user.id, interaction.user.name, source="user_command", category=LogCategory.COMMAND, details={"name": name})
 
         try:
             resident_data = None

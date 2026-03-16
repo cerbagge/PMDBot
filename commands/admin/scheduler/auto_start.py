@@ -4,6 +4,11 @@
 import discord
 from discord import app_commands
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 관리자 권한 체크
 def is_admin(interaction: discord.Interaction) -> bool:
     CALLSIGN_MANAGER_ROLE_ID = 1448131353890783359
@@ -21,6 +26,9 @@ def setup(bot):
     @app_commands.check(is_admin)
     async def 자동실행시작(interaction: discord.Interaction):
         """자동 실행을 수동으로 시작"""
+        if bot_logger:
+            bot_logger.log_command("자동실행시작", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.SCHEDULER)
         try:
             from scheduler import manual_execute_auto_roles
 

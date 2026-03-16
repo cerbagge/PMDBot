@@ -4,6 +4,11 @@ import discord
 from discord import app_commands
 from typing import Literal
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 
 def is_return_manager(interaction: discord.Interaction) -> bool:
     if interaction.user.guild_permissions.administrator:
@@ -32,6 +37,11 @@ def setup(bot):
         유저: discord.Member = None
     ):
         await interaction.response.defer(ephemeral=True)
+
+        if bot_logger:
+            bot_logger.log_command("복귀설정", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.RETURN,
+                                   details={"기능": 기능})
 
         try:
             from return_config_manager import return_config_manager

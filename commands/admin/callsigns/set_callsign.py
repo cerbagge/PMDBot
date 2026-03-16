@@ -24,6 +24,11 @@ except ImportError:
     db_manager = None
     DATABASE_ENABLED = False
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 환경 변수
 MC_API_BASE = os.getenv("MC_API_BASE", "https://api.planetearth.kr")
 BASE_NATION = os.getenv("BASE_NATION", "Red_Mafia")
@@ -71,6 +76,11 @@ def setup(bot):
 
         # defer를 먼저 호출 (API 조회 및 닉네임 변경에 시간이 걸릴 수 있음)
         await interaction.response.defer(ephemeral=True)
+
+        if bot_logger:
+            bot_logger.log_command("콜사인", interaction.user.id, interaction.user.name,
+                                   source="user_command", category=LogCategory.CALLSIGN,
+                                   details={"텍스트": 텍스트})
 
         # 콜사인 설정
         success, message = callsign_manager.set_callsign(interaction.user.id, 텍스트)

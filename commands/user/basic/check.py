@@ -10,6 +10,12 @@ import os
 BASE_NATION = os.getenv("BASE_NATION", "Red_Mafia")
 
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
+
 def setup(bot):
     """봇에 /확인 명령어 등록"""
 
@@ -17,6 +23,9 @@ def setup(bot):
     async def 확인(interaction: discord.Interaction):
         """사용자 본인의 국적 확인 및 역할 부여 - scheduler의 process_single_user 사용"""
         await interaction.response.defer(thinking=True)
+
+        if bot_logger:
+            bot_logger.log_command("확인", interaction.user.id, interaction.user.name, source="user_command", category=LogCategory.COMMAND)
 
         member = interaction.user
         discord_id = member.id

@@ -21,6 +21,11 @@ except ImportError:
     callsign_manager = None
     CALLSIGN_ENABLED = False
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 관리자 권한 체크
 def is_admin(interaction: discord.Interaction) -> bool:
     CALLSIGN_MANAGER_ROLE_ID = 1448131353890783359
@@ -134,6 +139,9 @@ def setup(bot):
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
+
+        if bot_logger:
+            bot_logger.log_command("데이터베이스", interaction.user.id, interaction.user.name, source="admin_command", category=LogCategory.ADMIN, details={"기능": 기능})
 
         if 기능 == "사용자_조회":
             if not 유저:

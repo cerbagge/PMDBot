@@ -5,6 +5,11 @@ import discord
 from discord import app_commands
 from typing import Literal
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 관리자 권한 체크
 def is_admin(interaction: discord.Interaction) -> bool:
     CALLSIGN_MANAGER_ROLE_ID = 1448131353890783359
@@ -30,6 +35,10 @@ def setup(bot):
         유저: discord.Member = None
     ):
         """자동실행 예외 대상 관리"""
+        if bot_logger:
+            bot_logger.log_command("예외설정", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.SCHEDULER,
+                                   details={"기능": 기능})
         try:
             from exception_manager import exception_manager
         except ImportError:

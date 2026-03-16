@@ -23,6 +23,11 @@ except ImportError:
     CALLSIGN_ENABLED = False
 
 try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
+try:
     from town_role_manager import town_role_manager
     TOWN_ROLE_ENABLED = True
 except ImportError:
@@ -47,6 +52,9 @@ def setup(bot):
     @bot.tree.command(name="도움말", description="봇의 모든 명령어를 확인합니다")
     async def 도움말(interaction: discord.Interaction):
         """봇의 모든 명령어와 설명을 표시"""
+
+        if bot_logger:
+            bot_logger.log_command("도움말", interaction.user.id, interaction.user.name, source="user_command", category=LogCategory.COMMAND)
 
         # 관리자 권한 확인
         is_admin = interaction.user.guild_permissions.administrator

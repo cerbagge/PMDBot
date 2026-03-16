@@ -7,6 +7,11 @@ from discord import app_commands
 from datetime import datetime
 import re
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 
 # 관리자 권한 체크
 def is_admin(interaction: discord.Interaction) -> bool:
@@ -52,11 +57,12 @@ class AnnouncementModal(discord.ui.Modal, title="📢 공지 작성"):
         max_length=2000
     )
 
-    def __init__(self, scheduled_time: str = None, is_silent: bool = False, channel: discord.TextChannel = None):
+    def __init__(self, scheduled_time: str = None, is_silent: bool = False, channel: discord.TextChannel = None, mention_role: discord.Role = None):
         super().__init__()
         self.scheduled_time = scheduled_time
         self.is_silent = is_silent
         self.target_channel = channel
+        self.mention_role = mention_role
 
     async def on_submit(self, interaction: discord.Interaction):
         text = self.텍스트.value.replace("\\n", "\n")
@@ -64,8 +70,13 @@ class AnnouncementModal(discord.ui.Modal, title="📢 공지 작성"):
         # --- 즉시 전송 (예약 없음) ---
         if self.scheduled_time is None:
             try:
+                # 멘션대상이 있으면 텍스트 앞에 멘션 추가
+                send_text = text
+                if self.mention_role:
+                    send_text = f"{self.mention_role.mention}\n{text}"
+
                 await self.target_channel.send(
-                    content=text,
+                    content=send_text,
                     silent=self.is_silent
                 )
 
@@ -77,6 +88,8 @@ class AnnouncementModal(discord.ui.Modal, title="📢 공지 작성"):
                 )
                 embed.add_field(name="📢 모드", value=mode_text, inline=True)
                 embed.add_field(name="📍 채널", value=self.target_channel.mention, inline=True)
+                if self.mention_role:
+                    embed.add_field(name="📣 멘션", value=self.mention_role.mention, inline=True)
                 embed.add_field(
                     name="📝 내용 미리보기",
                     value=text[:100] + ("..." if len(text) > 100 else ""),
@@ -116,10 +129,15 @@ class AnnouncementModal(discord.ui.Modal, title="📢 공지 작성"):
 
             internal_time = scheduled_dt.strftime("%Y-%m-%d %H:%M")
 
+            # 멘션대상이 있으면 텍스트 앞에 멘션 추가
+            schedule_text = text
+            if self.mention_role:
+                schedule_text = f"<@&{self.mention_role.id}>\n{text}"
+
             entry = announcement_schedule_manager.add_schedule(
                 channel_id=self.target_channel.id,
                 guild_id=interaction.guild.id,
-                text=text,
+                text=schedule_text,
                 silent=self.is_silent,
                 scheduled_time=internal_time,
                 created_by=interaction.user.id
@@ -138,6 +156,8 @@ class AnnouncementModal(discord.ui.Modal, title="📢 공지 작성"):
                 embed.add_field(name="📢 모드", value=mode_text, inline=True)
                 embed.add_field(name="⏰ 예약 시간", value=display_time, inline=True)
                 embed.add_field(name="📍 채널", value=self.target_channel.mention, inline=True)
+                if self.mention_role:
+                    embed.add_field(name="📣 멘션", value=self.mention_role.mention, inline=True)
                 embed.add_field(
                     name="📝 내용 미리보기",
                     value=text[:100] + ("..." if len(text) > 100 else ""),
@@ -169,7 +189,8 @@ def setup(bot):
     @bot.tree.command(name="공지", description="공지를 전송하거나 예약합니다 (팝업으로 내용 입력)")
     @app_commands.describe(
         예약="예약 시간 (형식: YYYY.MM.DD HH:MM)",
-        silent="알림 없이 전송 (on: 무음, off: 일반 알림)"
+        silent="알림 없이 전송 (on: 무음, off: 일반 알림)",
+        멘션대상="공지에 멘션할 역할 (@everyone은 역할 없이 자동 포함하지 않음)"
     )
     @app_commands.choices(silent=[
         app_commands.Choice(name="on (무음)", value="on"),
@@ -179,15 +200,23 @@ def setup(bot):
     async def 공지(
         interaction: discord.Interaction,
         예약: str = None,
-        silent: app_commands.Choice[str] = None
+        silent: app_commands.Choice[str] = None,
+        멘션대상: discord.Role = None
     ):
         """공지 전송/예약 명령어 - Modal 팝업으로 내용 입력"""
+        if bot_logger:
+            bot_logger.log_command("공지", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.ANNOUNCEMENT,
+                                   details={"예약": 예약, "silent": silent.value if silent else None,
+                                            "멘션대상": 멘션대상.name if 멘션대상 else None})
+
         is_silent = silent is not None and silent.value == "on"
 
         modal = AnnouncementModal(
             scheduled_time=예약,
             is_silent=is_silent,
-            channel=interaction.channel
+            channel=interaction.channel,
+            mention_role=멘션대상
         )
         await interaction.response.send_modal(modal)
 
@@ -218,6 +247,11 @@ def setup(bot):
         예약id: str = None
     ):
         """공지 예약 관리 명령어"""
+        if bot_logger:
+            bot_logger.log_command("공지관리", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.ANNOUNCEMENT,
+                                   details={"기능": 기능.value})
+
         try:
             from announcement_scheduler import announcement_schedule_manager
 

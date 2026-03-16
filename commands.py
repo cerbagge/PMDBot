@@ -8,13 +8,16 @@ import json
 import time
 import datetime
 from utils import format_estimated_time
+from log_manager import get_logger, send_log_message
+
+logger = get_logger("commands")
 
 # 안전한 import 처리
 try:
     from queue_manager import queue_manager
-    print("✅ queue_manager 로드 성공")
+    logger.info("queue_manager 로드 성공")
 except ImportError as e:
-    print(f"❌ queue_manager 로드 실패: {e}")
+    logger.error(f"queue_manager 로드 실패: {e}")
     # 더미 queue_manager 클래스 생성
     class DummyQueueManager:
         def get_queue_size(self): return 0
@@ -25,9 +28,9 @@ except ImportError as e:
 
 try:
     from exception_manager import exception_manager
-    print("✅ exception_manager 로드 성공")
+    logger.info("exception_manager 로드 성공")
 except ImportError as e:
-    print(f"❌ exception_manager 로드 실패: {e}")
+    logger.error(f"exception_manager 로드 실패: {e}")
     # 더미 exception_manager 클래스 생성
     class DummyExceptionManager:
         def get_exceptions(self): return []
@@ -38,22 +41,22 @@ except ImportError as e:
 # database_manager 안전하게 import
 try:
     from database_manager import db_manager
-    print("✅ database_manager 모듈 로드됨 (commands.py)")
+    logger.info("database_manager 모듈 로드됨")
     DATABASE_ENABLED = True
 except ImportError as e:
-    print(f"⚠️ database_manager 모듈을 로드할 수 없습니다 (commands.py): {e}")
-    print("📝 데이터베이스 기능이 비활성화됩니다.")
+    logger.warning(f"database_manager 모듈을 로드할 수 없습니다: {e}")
+    logger.info("데이터베이스 기능이 비활성화됩니다.")
     db_manager = None
     DATABASE_ENABLED = False
 
 # callsign_manager 안전하게 import
 try:
     from callsign_manager import callsign_manager, validate_callsign, get_user_display_info
-    print("✅ callsign_manager 모듈 로드됨 (commands.py)")
+    logger.info("callsign_manager 모듈 로드됨")
     CALLSIGN_ENABLED = True
 except ImportError as e:
-    print(f"⚠️ callsign_manager 모듈을 로드할 수 없습니다 (commands.py): {e}")
-    print("📝 콜사인 기능이 비활성화됩니다.")
+    logger.warning(f"callsign_manager 모듈을 로드할 수 없습니다: {e}")
+    logger.info("콜사인 기능이 비활성화됩니다.")
     callsign_manager = None
     CALLSIGN_ENABLED = False
 
@@ -69,11 +72,11 @@ except ImportError as e:
 # town_role_manager 안전하게 import
 try:
     from town_role_manager import town_role_manager, get_towns_in_nation
-    print("✅ town_role_manager 모듈 로드됨 (commands.py)")
+    logger.info("town_role_manager 모듈 로드됨")
     TOWN_ROLE_ENABLED = True
 except ImportError as e:
-    print(f"⚠️ town_role_manager 모듈을 로드할 수 없습니다 (commands.py): {e}")
-    print("📝 마을 역할 기능이 비활성화됩니다.")
+    logger.warning(f"town_role_manager 모듈을 로드할 수 없습니다: {e}")
+    logger.info("마을 역할 기능이 비활성화됩니다.")
     town_role_manager = None
     TOWN_ROLE_ENABLED = False
 
@@ -135,52 +138,50 @@ async def get_country_info(country_name):
                 "all_names": nation_data.get("names", [nation_data.get("name", country_name)])
             }
 
-        print(f"❌ 국가 정보를 찾을 수 없음: {country_name}")
+        logger.error(f"국가 정보를 찾을 수 없음: {country_name}")
         return None
 
     except PEApiError as e:
         # PE API 서버 연결 에러 - 사용자에게 명확한 메시지 전달
-        print(f"🔴 PE API 에러: {e}")
+        logger.error(f"PE API 에러: {e}")
         raise  # 호출자에게 다시 던져서 처리하도록
     except Exception as e:
-        print(f"❌ 국가 정보 조회 실패: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"국가 정보 조회 실패: {e}", exc_info=True)
         return None
 
 # 대체 함수 정의 - 개선된 버전
 async def get_towns_in_nation(nation_name: str):
     """대체 함수: town_role_manager가 없을 때 기본 마을 목록 반환"""
-    print(f"⚠️ town_role_manager가 없어서 대체 함수 사용: {nation_name}")
+    logger.warning(f"town_role_manager가 없어서 대체 함수 사용: {nation_name}")
     try:
         api_base = MC_API_BASE or "https://api.planetearth.kr"
-        
+
         async with aiohttp.ClientSession() as session:
             url = f"{api_base}/nation?name={nation_name}"
-            print(f"🔍 대체 API 호출: {url}")
-            
+            logger.debug(f"대체 API 호출: {url}")
+
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=2)) as response:
                 if response.status != 200:
-                    print(f"❌ API 응답 오류: HTTP {response.status}")
+                    logger.error(f"API 응답 오류: HTTP {response.status}")
                     return ["Seoul", "Busan", "Incheon"]  # 기본 테스트 마을
-                
+
                 data = await response.json()
                 if not data.get('data') or not data['data']:
-                    print(f"❌ 국가 데이터 없음: {nation_name}")
+                    logger.error(f"국가 데이터 없음: {nation_name}")
                     return ["Seoul", "Busan", "Incheon"]  # 기본 테스트 마을
-                
+
                 nation_data = data['data'][0]
                 towns = nation_data.get('towns', [])
-                
+
                 if not towns:
-                    print(f"ℹ️ {nation_name}에 마을이 없습니다.")
+                    logger.info(f"{nation_name}에 마을이 없습니다.")
                     return ["Seoul", "Busan", "Incheon"]  # 기본 테스트 마을
-                
-                print(f"✅ {nation_name} 마을 목록: {len(towns)}개")
+
+                logger.info(f"{nation_name} 마을 목록: {len(towns)}개")
                 return towns
-                
+
     except Exception as e:
-        print(f"❌ 대체 함수에서 오류: {e}")
+        logger.error(f"대체 함수에서 오류: {e}")
         # 최후의 대체 마을 목록
         return ["Seoul", "Busan", "Incheon", "Daegu", "Daejeon", "Gwangju", "Ulsan"]
 
@@ -196,7 +197,7 @@ class ServerQueueChecker:
     async def get_minecraft_status(self):
         """마인크래프트 서버 상태 조회 (mcapi.us API 사용)"""
         try:
-            print(f"🔌 서버 상태 조회 시도: {self.mc_host}")
+            logger.debug(f"서버 상태 조회 시도: {self.mc_host}")
 
             # mcapi.us API 사용 (더 정확하고 안정적)
             api_url = f"https://mcapi.us/server/status?ip={self.mc_host}"
@@ -209,17 +210,17 @@ class ServerQueueChecker:
 
                         if data.get('online'):
                             player_count = data.get('players', {}).get('now', 0)
-                            print(f"✅ 서버 온라인: {player_count}명 (mcapi.us)")
+                            logger.info(f"서버 온라인: {player_count}명 (mcapi.us)")
                             return data
                         else:
-                            print(f"❌ 서버 오프라인")
+                            logger.error("서버 오프라인")
                             return None
                     else:
-                        print(f"❌ API 응답 오류: HTTP {response.status}")
+                        logger.error(f"API 응답 오류: HTTP {response.status}")
                         return None
 
         except Exception as e:
-            print(f"❌ MC 서버 조회 실패: {e}")
+            logger.error(f"MC 서버 조회 실패: {e}")
             return None
 
     async def get_mc_player_count(self):
@@ -237,7 +238,7 @@ class ServerQueueChecker:
             async with aiohttp.ClientSession() as session:
                 # Dynmap API URL (베이스 URL 자체를 요청)
                 dynmap_api_url = f"{self.dynmap_url}/up/world/{world}/"
-                print(f"  🔍 Dynmap 조회: {dynmap_api_url}")
+                logger.debug(f"Dynmap 조회: {dynmap_api_url}")
 
                 async with session.get(dynmap_api_url, timeout=aiohttp.ClientTimeout(total=10)) as response:
                     if response.status == 200:
@@ -255,23 +256,23 @@ class ServerQueueChecker:
                             # 전체 플레이어 수 (로비 + 게임 내 모두 포함)
                             total_count = len(players)
 
-                            print(f"  ✅ Dynmap 플레이어: 전체 {total_count}명 (currentcount: {total_connections}명)")
+                            logger.info(f"Dynmap 플레이어: 전체 {total_count}명 (currentcount: {total_connections}명)")
 
                             # 전체 플레이어 수 반환 (로비 + 게임 내)
                             return total_count
 
                         except json.JSONDecodeError as e:
-                            print(f"  ❌ JSON 파싱 실패: {e}")
+                            logger.error(f"JSON 파싱 실패: {e}")
                             return -1
                         except Exception as e:
-                            print(f"  ❌ 데이터 처리 실패: {e}")
+                            logger.error(f"데이터 처리 실패: {e}")
                             return -1
                     else:
-                        print(f"  ❌ HTTP {response.status}")
+                        logger.error(f"HTTP {response.status}")
                         return -1
 
         except Exception as e:
-            print(f"❌ Dynmap 조회 실패: {e}")
+            logger.error(f"Dynmap 조회 실패: {e}")
             return -1
 
     async def get_dynmap_lobby_players(self, world: str = "world"):
@@ -295,23 +296,23 @@ class ServerQueueChecker:
                             lobby_players = [p for p in players if p.get('world') == '-some-other-bogus-world-']
 
                             lobby_count = len(lobby_players)
-                            print(f"  ✅ Dynmap 로비 플레이어: {lobby_count}명")
+                            logger.info(f"Dynmap 로비 플레이어: {lobby_count}명")
 
                             # 로비 플레이어 수 반환
                             return lobby_count
 
                         except json.JSONDecodeError as e:
-                            print(f"  ❌ JSON 파싱 실패: {e}")
+                            logger.error(f"로비 JSON 파싱 실패: {e}")
                             return -1
                         except Exception as e:
-                            print(f"  ❌ 데이터 처리 실패: {e}")
+                            logger.error(f"로비 데이터 처리 실패: {e}")
                             return -1
                     else:
-                        print(f"  ❌ HTTP {response.status}")
+                        logger.error(f"로비 HTTP {response.status}")
                         return -1
 
         except Exception as e:
-            print(f"❌ Dynmap 로비 조회 실패: {e}")
+            logger.error(f"Dynmap 로비 조회 실패: {e}")
             return -1
 
     async def get_queue_info(self):
@@ -321,7 +322,7 @@ class ServerQueueChecker:
 
         # MC 서버 연결 실패했지만 Dynmap은 성공한 경우
         if mc_total == -1 and dynmap_ingame != -1:
-            print(f"ℹ️ MC 서버 연결 실패, Dynmap 데이터만 사용: {dynmap_ingame}명")
+            logger.info(f"MC 서버 연결 실패, Dynmap 데이터만 사용: {dynmap_ingame}명")
             # Dynmap 플레이어 수를 전체 및 게임 내로 사용 (대기열 0)
             return (-1, dynmap_ingame, dynmap_ingame, 0)
 
@@ -331,7 +332,7 @@ class ServerQueueChecker:
 
         # 대기열 계산 (인원 제한 없이 항상 계산)
         queue_count = max(0, mc_total - dynmap_ingame)
-        print(f"ℹ️ 대기열 계산: {mc_total} - {dynmap_ingame} = {queue_count}명")
+        logger.info(f"대기열 계산: {mc_total} - {dynmap_ingame} = {queue_count}명")
 
         return (mc_total, dynmap_ingame, dynmap_ingame, queue_count)
 
@@ -345,24 +346,6 @@ FAILURE_CHANNEL_ID = int(os.getenv("FAILURE_CHANNEL_ID", "0"))
 
 # 콜사인 쿨타임 저장소 (실제로는 파일이나 DB에 저장해야 함)
 callsign_cooldowns = {}
-
-async def send_log_message(bot, channel_id: int, embed: discord.Embed):
-    """로그 메시지를 지정된 채널에 전송"""
-    try:
-        if channel_id == 0:
-            print("⚠️ 채널 ID가 설정되지 않았습니다.")
-            return
-
-        channel = bot.get_channel(channel_id)
-        if not channel:
-            print(f"⚠️ 채널을 찾을 수 없습니다: {channel_id}")
-            return
-
-        await channel.send(embed=embed)
-        print(f"📨 로그 메시지 전송됨: {channel.name}")
-
-    except Exception as e:
-        print(f"❌ 로그 메시지 전송 실패: {e}")
 
 def check_callsign_cooldown(user_id: int) -> tuple[bool, int]:
     """
@@ -399,17 +382,17 @@ async def verify_town_in_nation(town_name: str, nation_name: str) -> bool:
         towns = await get_towns_in_nation(nation_name)
         return town_name in towns
     except Exception as e:
-        print(f"❌ 마을 검증 오류: {e}")
+        logger.error(f"마을 검증 오류: {e}")
         return False
 
 # 자동완성 함수를 독립적으로 정의 - 개선된 버전
 async def town_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
     """마을 이름 자동완성 - 개선된 버전"""
     try:
-        print(f"🔍 자동완성 요청: current='{current}', user={interaction.user.display_name}")
-        
+        logger.debug(f"자동완성 요청: current='{current}', user={interaction.user.display_name}")
+
         if not TOWN_ROLE_ENABLED:
-            print("⚠️ TOWN_ROLE_ENABLED가 False입니다.")
+            logger.warning("TOWN_ROLE_ENABLED가 False입니다.")
             return [app_commands.Choice(name="마을 역할 기능이 비활성화됨", value="disabled")]
             
         # 캐시된 마을 목록이 있다면 사용 (빠른 응답을 위해)
@@ -417,7 +400,7 @@ async def town_autocomplete(interaction: discord.Interaction, current: str) -> L
             current_time = time.time()
             # 캐시가 5분 이내라면 사용
             if current_time - town_autocomplete._cache_time < 300:
-                print(f"📦 캐시된 마을 목록 사용: {len(town_autocomplete._cached_towns)}개")
+                logger.debug(f"캐시된 마을 목록 사용: {len(town_autocomplete._cached_towns)}개")
                 towns = town_autocomplete._cached_towns
             else:
                 towns = None
@@ -426,28 +409,28 @@ async def town_autocomplete(interaction: discord.Interaction, current: str) -> L
         
         # 캐시가 없거나 만료된 경우 새로 가져오기
         if towns is None:
-            print(f"🌐 API에서 마을 목록 가져오는 중... (국가: {BASE_NATION})")
+            logger.debug(f"API에서 마을 목록 가져오는 중... (국가: {BASE_NATION})")
             try:
                 # 타임아웃을 짧게 설정 (자동완성은 3초 제한)
                 towns = await get_towns_in_nation(BASE_NATION)
-                print(f"✅ API에서 {len(towns) if towns else 0}개 마을 가져옴")
+                logger.info(f"API에서 {len(towns) if towns else 0}개 마을 가져옴")
                 
                 # 캐시 저장
                 if towns:
                     town_autocomplete._cached_towns = towns
                     town_autocomplete._cache_time = time.time()
-                    print(f"💾 마을 목록 캐시됨")
+                    logger.debug("마을 목록 캐시됨")
                     
             except Exception as api_error:
-                print(f"❌ API 호출 실패: {api_error}")
+                logger.error(f"API 호출 실패: {api_error}")
                 # API 실패 시 기본 안내 메시지
                 return [app_commands.Choice(name="마을 목록을 불러올 수 없습니다", value="api_error")]
         
         if not towns:
-            print(f"⚠️ {BASE_NATION}에 마을이 없습니다.")
+            logger.warning(f"{BASE_NATION}에 마을이 없습니다.")
             return [app_commands.Choice(name=f"{BASE_NATION}에 마을이 없습니다", value="no_towns")]
         
-        print(f"🏘️ 총 {len(towns)}개 마을 발견")
+        logger.debug(f"총 {len(towns)}개 마을 발견")
         
         # 현재 입력값으로 필터링
         if current:
@@ -463,11 +446,11 @@ async def town_autocomplete(interaction: discord.Interaction, current: str) -> L
                 elif current_lower in town_lower:
                     filtered_towns.append(town)
             
-            print(f"🔍 '{current}' 검색 결과: {len(filtered_towns)}개 마을")
+            logger.debug(f"'{current}' 검색 결과: {len(filtered_towns)}개 마을")
         else:
             # 입력이 없으면 처음 25개 마을 반환
             filtered_towns = towns[:25]
-            print(f"📋 전체 마을 목록에서 처음 {len(filtered_towns)}개 반환")
+            logger.debug(f"전체 마을 목록에서 처음 {len(filtered_towns)}개 반환")
         
         # Discord 제한인 25개까지만 반환
         limited_towns = filtered_towns[:25]
@@ -479,13 +462,11 @@ async def town_autocomplete(interaction: discord.Interaction, current: str) -> L
             display_name = town if len(town) <= 100 else town[:97] + "..."
             choices.append(app_commands.Choice(name=display_name, value=town))
         
-        print(f"✅ 자동완성 완료: {len(choices)}개 선택지 반환")
+        logger.debug(f"자동완성 완료: {len(choices)}개 선택지 반환")
         return choices
         
     except Exception as e:
-        print(f"💥 자동완성 함수에서 예외 발생: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"자동완성 함수에서 예외 발생: {e}", exc_info=True)
         
         # 오류 시 기본 안내 메시지 반환
         return [app_commands.Choice(name="오류가 발생했습니다. 관리자에게 문의하세요", value="error")]
@@ -640,7 +621,7 @@ class TownRoleConfirmView(discord.ui.View):
                         raise ValueError(f"마을 또는 국가 UUID를 가져올 수 없습니다. town_uuid={town_uuid}, nation_uuid={nation_uuid}")
 
                 except Exception as api_error:
-                    print(f"❌ API 조회 오류: {api_error}")
+                    logger.error(f"API 조회 오류: {api_error}")
                     raise api_error
 
             embed = discord.Embed(
@@ -671,7 +652,7 @@ class TownRoleConfirmView(discord.ui.View):
             self.stop()
 
         except Exception as e:
-            print(f"❌ 연동하기 버튼 오류: {e}")
+            logger.error(f"연동하기 버튼 오류: {e}")
             try:
                 await interaction.followup.send(
                     embed=discord.Embed(
@@ -708,7 +689,7 @@ class TownRoleConfirmView(discord.ui.View):
             self.stop()
 
         except Exception as e:
-            print(f"❌ 취소하기 버튼 오류: {e}")
+            logger.error(f"취소하기 버튼 오류: {e}")
             try:
                 await interaction.followup.send(
                     embed=discord.Embed(
@@ -738,7 +719,7 @@ class TownRoleConfirmView(discord.ui.View):
                     view=self
                 )
             except Exception as e:
-                print(f"⚠️ 타임아웃 메시지 편집 실패: {e}")
+                logger.warning(f"타임아웃 메시지 편집 실패: {e}")
 
 class SlashCommands(commands.Cog):
     def __init__(self, bot):
@@ -791,7 +772,7 @@ class SlashCommands(commands.Cog):
             
         except Exception as e:
             # 웹훅 실패 시 기존 방식으로 폴백
-            print(f"웹훅 전송 실패: {e}")
+            logger.error(f"웹훅 전송 실패: {e}")
             embed = discord.Embed(
                 title="🛡️ 국민 확인 결과 (요약)",
                 description="전체 결과가 너무 길어서 요약본만 표시됩니다.",
@@ -816,18 +797,18 @@ class SlashCommands(commands.Cog):
                 if role and role not in member.roles:
                     try:
                         await member.add_roles(role)
-                        print(f"✅ {member.display_name}에게 {alliance['name']} 동맹 역할 부여")
+                        logger.info(f"{member.display_name}에게 {alliance['name']} 동맹 역할 부여")
                     except Exception as e:
-                        print(f"역할 부여 실패: {e}")
-    
+                        logger.error(f"역할 부여 실패: {e}")
+
     async def remove_alliance_role(self, member, country_name):
         """동맹 역할 제거"""
         alliance_data = load_alliance_data()
         role_data = load_role_data()
-        
-        alliance = next((a for a in alliance_data["alliances"] 
+
+        alliance = next((a for a in alliance_data["alliances"]
                        if a["name"].lower() == country_name.lower()), None)
-        
+
         if alliance:
             role_id = role_data["roles"].get(alliance["name"])
             if role_id:
@@ -835,9 +816,9 @@ class SlashCommands(commands.Cog):
                 if role and role in member.roles:
                     try:
                         await member.remove_roles(role)
-                        print(f"❌ {member.display_name}에게서 {alliance['name']} 동맹 역할 제거")
+                        logger.info(f"{member.display_name}에게서 {alliance['name']} 동맹 역할 제거")
                     except Exception as e:
-                        print(f"역할 제거 실패: {e}")
+                        logger.error(f"역할 제거 실패: {e}")
 
     @app_commands.command(name="도움말", description="봇의 모든 명령어를 확인합니다")
     async def 도움말(self, interaction: discord.Interaction):
@@ -1420,9 +1401,9 @@ class SlashCommands(commands.Cog):
                                         minecraft_uuid=mc_uuid,
                                         minecraft_name=mc_id
                                     )
-                                    print(f"  💾 데이터베이스 저장: {mc_id} (UUID: {mc_uuid[:8]}...)")
+                                    logger.info(f"데이터베이스 저장: {mc_id} (UUID: {mc_uuid[:8]}...)")
                                 except Exception as db_error:
-                                    print(f"  ⚠️ 데이터베이스 저장 실패: {db_error}")
+                                    logger.warning(f"데이터베이스 저장 실패: {db_error}")
 
                             if mc_id:
                                 time.sleep(2)
@@ -1457,7 +1438,7 @@ class SlashCommands(commands.Cog):
                                                                         if format_str:
                                                                             role_format = format_str
                                                                             applied_format = f"{role.name} 역할 양식"
-                                                                            print(f"  🎭 역할 양식 적용: {role.name} - {format_str}")
+                                                                            logger.debug(f"역할 양식 적용: {role.name} - {format_str}")
                                                                             break
 
                                                                 # 닉네임 생성
@@ -1478,17 +1459,17 @@ class SlashCommands(commands.Cog):
                                                                 try:
                                                                     await member.edit(nick=new_nickname)
                                                                     nickname_updated = True
-                                                                    print(f"✅ 콜사인 적용으로 닉네임 변경: {new_nickname}")
+                                                                    logger.info(f"콜사인 적용으로 닉네임 변경: {new_nickname}")
                                                                 except discord.Forbidden:
                                                                     nickname_error = "닉네임 변경 권한이 없습니다."
-                                                                    print(f"⚠️ 닉네임 변경 권한 없음")
+                                                                    logger.warning("닉네임 변경 권한 없음")
                                                                 except Exception as e:
                                                                     nickname_error = f"닉네임 변경 실패: {str(e)[:50]}"
-                                                                    print(f"⚠️ 닉네임 변경 실패: {e}")
+                                                                    logger.warning(f"닉네임 변경 실패: {e}")
                                                             else:
                                                                 nickname_error = f"{BASE_NATION} 국민만 콜사인을 사용할 수 있습니다."
         except Exception as e:
-            print(f"⚠️ 콜사인 즉시 적용 중 오류: {e}")
+            logger.warning(f"콜사인 즉시 적용 중 오류: {e}")
             nickname_error = "마인크래프트 계정 정보를 확인할 수 없습니다."
 
         # {CC} 포함 역할 찾기
@@ -1627,9 +1608,9 @@ class SlashCommands(commands.Cog):
                             try:
                                 await member.add_roles(role)
                                 updated_count += 1
-                                print(f"✅ {member.display_name}: {alliance['name']} 역할 부여")
+                                logger.info(f"{member.display_name}: {alliance['name']} 역할 부여")
                             except Exception as e:
-                                print(f"⚠️ 역할 부여 실패 ({member.display_name}): {e}")
+                                logger.warning(f"역할 부여 실패 ({member.display_name}): {e}")
                 else:
                     # 동맹이 아닌데 역할을 가지고 있는 경우 제거
                     for alliance_name, role_id in role_data["roles"].items():
@@ -1638,9 +1619,9 @@ class SlashCommands(commands.Cog):
                             try:
                                 await member.remove_roles(role)
                                 removed_count += 1
-                                print(f"❌ {member.display_name}: {alliance_name} 역할 제거")
+                                logger.info(f"{member.display_name}: {alliance_name} 역할 제거")
                             except Exception as e:
-                                print(f"⚠️ 역할 제거 실패 ({member.display_name}): {e}")
+                                logger.warning(f"역할 제거 실패 ({member.display_name}): {e}")
 
         embed = discord.Embed(
             title="🔍 동맹 역할 확인 완료",
@@ -2001,7 +1982,7 @@ class SlashCommands(commands.Cog):
                             
                             await log_channel.send(embed=log_embed)
                 except Exception as e:
-                    print(f"로그 채널 기록 실패: {e}")
+                    logger.error(f"로그 채널 기록 실패: {e}")
                     if LOG_ENABLED and bot_logger:
                         bot_logger.log_error(f"로그 채널 기록 실패: {str(e)}")
         
@@ -2315,7 +2296,7 @@ class SlashCommands(commands.Cog):
                     await interaction.followup.send(embed=embed, file=discord_file)
                     return
                 except Exception as e:
-                    print(f"⚠️ 백업 파일 업로드 실패: {e}")
+                    logger.warning(f"백업 파일 업로드 실패: {e}")
                     embed.add_field(
                         name="⚠️ 파일 업로드 실패",
                         value=f"파일은 서버에 저장되었으나 Discord 업로드에 실패했습니다.\n오류: {str(e)[:100]}",
@@ -2807,7 +2788,7 @@ class SlashCommands(commands.Cog):
             await interaction.response.defer(thinking=True)
             
             try:
-                print(f"🔍 마을 검증 시작: {마을} in {BASE_NATION}")
+                logger.debug(f"마을 검증 시작: {마을} in {BASE_NATION}")
                 is_valid_town = await verify_town_in_nation(마을, BASE_NATION)
                 
                 # 검증 결과에 따른 임베드 생성
@@ -2907,7 +2888,7 @@ class SlashCommands(commands.Cog):
         member = interaction.user
         discord_id = member.id
 
-        print(f"🔍 /확인 명령어 시작 - 사용자: {member.display_name} (ID: {discord_id})")
+        logger.info(f"/확인 명령어 시작 - 사용자: {member.display_name} (ID: {discord_id})")
 
         # scheduler의 process_single_user 함수 import
         try:
@@ -2966,7 +2947,7 @@ class SlashCommands(commands.Cog):
                     )
 
                 await interaction.followup.send(embed=embed, ephemeral=True)
-                print(f"🏁 /확인 처리 완료 - {member.display_name}: {nation}/{town}")
+                logger.info(f"/확인 처리 완료 - {member.display_name}: {nation}/{town}")
             else:
                 # 처리 실패
                 error_msg = result.get('error', '알 수 없는 오류') if result else '처리 실패'
@@ -2978,10 +2959,10 @@ class SlashCommands(commands.Cog):
                     ),
                     ephemeral=True
                 )
-                print(f"❌ /확인 처리 실패 - {member.display_name}: {error_msg}")
+                logger.error(f"/확인 처리 실패 - {member.display_name}: {error_msg}")
 
         except Exception as e:
-            print(f"💥 /확인 예외 발생: {e}")
+            logger.error(f"/확인 예외 발생: {e}", exc_info=True)
             await interaction.followup.send(
                 embed=discord.Embed(
                     title="❌ 오류 발생",
@@ -3059,7 +3040,7 @@ class SlashCommands(commands.Cog):
         # 마을 검증 테스트
         if 마을:
             try:
-                print(f"🧪 마을 검증 테스트 시작: {마을}")
+                logger.debug(f"마을 검증 테스트 시작: {마을}")
                 is_valid = await verify_town_in_nation(마을, BASE_NATION)
                 
                 if is_valid:
@@ -3538,7 +3519,7 @@ class SlashCommands(commands.Cog):
             members.append(유저)
             target_name = 유저.display_name
             target_type = "유저"
-            print(f"✅ 유저 감지: {유저.display_name} ({유저.id})")
+            logger.info(f"유저 감지: {유저.display_name} ({유저.id})")
 
         elif 선택.value == "role":
             if not 역할:
@@ -3552,7 +3533,7 @@ class SlashCommands(commands.Cog):
             members.extend(역할.members)
             target_name = 역할.name
             target_type = "역할"
-            print(f"✅ 역할 감지: {역할.name} ({len(members)}명)")
+            logger.info(f"역할 감지: {역할.name} ({len(members)}명)")
 
             if not members:
                 await interaction.response.send_message(
@@ -3561,7 +3542,7 @@ class SlashCommands(commands.Cog):
                 )
                 return
 
-        print(f"📋 처리할 멤버 수: {len(members)}")
+        logger.info(f"처리할 멤버 수: {len(members)}")
 
         # 대기열로 처리
         await self._handle_queue_processing(interaction, members, target_type, target_name)
@@ -3578,12 +3559,24 @@ class SlashCommands(commands.Cog):
             try:
                 if queue_manager.add_user(member.id):
                     added_count += 1
-                    print(f"✅ 대기열 추가: {member.display_name} ({member.id})")
+                    logger.info(f"대기열 추가: {member.display_name} ({member.id})")
+                    try:
+                        from log_manager import bot_logger
+                        if bot_logger:
+                            bot_logger.log_queue(
+                                f"대기열 추가 (관리자 명령): {member.display_name}",
+                                user_id=interaction.user.id, user_name=interaction.user.name,
+                                target_user_id=member.id, target_user_name=member.display_name,
+                                source="admin_command", action="queue_add",
+                                details={"target_type": target_type, "target_name": target_name}
+                            )
+                    except ImportError:
+                        pass
                 else:
                     already_in_queue += 1
-                    print(f"ℹ️ 이미 대기 중: {member.display_name} ({member.id})")
+                    logger.info(f"이미 대기 중: {member.display_name} ({member.id})")
             except Exception as e:
-                print(f"❌ 대기열 추가 실패 ({member.display_name}): {e}")
+                logger.error(f"대기열 추가 실패 ({member.display_name}): {e}")
                 already_in_queue += 1
 
         # 결과 메시지 생성
@@ -3630,119 +3623,119 @@ class SlashCommands(commands.Cog):
         not_base_nation = []
         errors = []
 
-        print(f"🔍 /국민확인 명령어 시작 - 대상: {target_type} '{target_name}', 총 {len(members)}명")
+        logger.info(f"/국민확인 명령어 시작 - 대상: {target_type} '{target_name}', 총 {len(members)}명")
 
         async with aiohttp.ClientSession() as session:
             for idx, member in enumerate(members, 1):
                 discord_id = member.id
-                print(f"📋 [{idx}/{len(members)}] 처리 중: {member.display_name} (ID: {discord_id})")
+                logger.info(f"[{idx}/{len(members)}] 처리 중: {member.display_name} (ID: {discord_id})")
 
                 try:
                     # 1단계: 디스코드 ID → 마크 ID
                     url1 = f"{MC_API_BASE}/discord?discord={discord_id}"
-                    print(f"  🔗 1단계 API 호출: {url1}")
-                    
+                    logger.debug(f"1단계 API 호출: {url1}")
+
                     async with session.get(url1, timeout=aiohttp.ClientTimeout(total=10)) as r1:
-                        print(f"  📥 1단계 응답: HTTP {r1.status}")
+                        logger.debug(f"1단계 응답: HTTP {r1.status}")
                         if r1.status != 200:
                             error_msg = f"마크ID 조회 실패 ({r1.status})"
                             errors.append(f"{member.mention} - {error_msg}")
-                            print(f"  ❌ {error_msg}")
+                            logger.error(error_msg)
                             continue
-                        
+
                         data1 = await r1.json()
-                        print(f"  📋 1단계 데이터: {data1}")
-                        
+                        logger.debug(f"1단계 데이터: {data1}")
+
                         if not data1.get('data') or not data1['data']:
                             error_msg = "마크ID 데이터 없음"
                             errors.append(f"{member.mention} - {error_msg}")
-                            print(f"  ❌ {error_msg}")
+                            logger.error(error_msg)
                             continue
-                            
+
                         mc_id = data1['data'][0].get('name')
                         if not mc_id:
                             error_msg = "마크ID 없음"
                             errors.append(f"{member.mention} - {error_msg}")
-                            print(f"  ❌ {error_msg}")
+                            logger.error(error_msg)
                             continue
-                        
-                        print(f"  ✅ 마크 ID 획득: {mc_id}")
+
+                        logger.info(f"마크 ID 획득: {mc_id}")
                         time.sleep(5)
 
                     # 2단계: 마크 ID → 마을
                     url2 = f"{MC_API_BASE}/resident?name={mc_id}"
-                    print(f"  🔗 2단계 API 호출: {url2}")
-                    
+                    logger.debug(f"2단계 API 호출: {url2}")
+
                     async with session.get(url2, timeout=aiohttp.ClientTimeout(total=10)) as r2:
-                        print(f"  📥 2단계 응답: HTTP {r2.status}")
+                        logger.debug(f"2단계 응답: HTTP {r2.status}")
                         if r2.status != 200:
                             error_msg = f"마을 조회 실패 ({r2.status})"
                             errors.append(f"{member.mention} (마크: {mc_id}) - {error_msg}")
-                            print(f"  ❌ {error_msg}")
+                            logger.error(error_msg)
                             continue
-                            
+
                         data2 = await r2.json()
-                        print(f"  📋 2단계 데이터: {data2}")
-                        
+                        logger.debug(f"2단계 데이터: {data2}")
+
                         if not data2.get('data') or not data2['data']:
                             error_msg = "마을 데이터 없음"
                             errors.append(f"{member.mention} (마크: {mc_id}) - {error_msg}")
-                            print(f"  ❌ {error_msg}")
+                            logger.error(error_msg)
                             continue
-                            
+
                         town = data2['data'][0].get('town')
                         if not town:
                             error_msg = "마을 없음"
                             errors.append(f"{member.mention} (마크: {mc_id}) - {error_msg}")
-                            print(f"  ❌ {error_msg}")
+                            logger.error(error_msg)
                             continue
-                        
-                        print(f"  ✅ 마을 획득: {town}")
+
+                        logger.info(f"마을 획득: {town}")
                         time.sleep(5)
 
                     # 3단계: 마을 → 국가
                     url3 = f"{MC_API_BASE}/town?name={town}"
-                    print(f"  🔗 3단계 API 호출: {url3}")
-                    
+                    logger.debug(f"3단계 API 호출: {url3}")
+
                     async with session.get(url3, timeout=aiohttp.ClientTimeout(total=10)) as r3:
-                        print(f"  📥 3단계 응답: HTTP {r3.status}")
+                        logger.debug(f"3단계 응답: HTTP {r3.status}")
                         if r3.status != 200:
                             error_msg = f"국가 조회 실패 ({r3.status})"
                             errors.append(f"{member.mention} (마을: {town}) - {error_msg}")
-                            print(f"  ❌ {error_msg}")
+                            logger.error(error_msg)
                             continue
-                            
+
                         data3 = await r3.json()
-                        print(f"  📋 3단계 데이터: {data3}")
-                        
+                        logger.debug(f"3단계 데이터: {data3}")
+
                         if not data3.get('data') or not data3['data']:
                             error_msg = "국가 데이터 없음"
                             errors.append(f"{member.mention} (마을: {town}) - {error_msg}")
-                            print(f"  ❌ {error_msg}")
+                            logger.error(error_msg)
                             continue
-                            
+
                         nation = data3['data'][0].get('nation')
                         if not nation:
                             error_msg = "국가 없음"
                             errors.append(f"{member.mention} (마을: {town}) - {error_msg}")
-                            print(f"  ❌ {error_msg}")
+                            logger.error(error_msg)
                             continue
-                        
-                        print(f"  ✅ 국가 획득: {nation}")
+
+                        logger.info(f"국가 획득: {nation}")
                         time.sleep(5)
 
                         if nation != BASE_NATION:
                             not_base_nation.append(f"{member.mention} (국가: {nation}, 마크: {mc_id})")
-                            print(f"  ⚠️ 다른 국가 소속: {nation}")
+                            logger.warning(f"다른 국가 소속: {nation}")
                         else:
-                            print(f"  ✅ {BASE_NATION} 국민 확인")
+                            logger.info(f"{BASE_NATION} 국민 확인")
 
                 except Exception as e:
                     error_msg = f"오류 발생: {str(e)[:50]}"
                     errors.append(f"{member.mention} - {error_msg}")
-                    print(f"  💥 예외 발생: {e}")
+                    logger.error(f"예외 발생: {e}")
 
-        print(f"🏁 /국민확인 처리 완료 - 총 {len(members)}명 중 다른국가: {len(not_base_nation)}명, 오류: {len(errors)}명")
+        logger.info(f"/국민확인 처리 완료 - 총 {len(members)}명 중 다른국가: {len(not_base_nation)}명, 오류: {len(errors)}명")
 
         # 메시지를 여러 개의 임베드로 분할하여 준비
         embeds_data = []
@@ -4611,7 +4604,7 @@ class SlashCommands(commands.Cog):
                 else:
                     await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
-            print(f"Error handler failed: {e}")
+            logger.error(f"Error handler failed: {e}")
 
     @app_commands.command(name="데이터베이스", description="데이터베이스 조회 및 관리 (관리자 전용)")
     @app_commands.describe(
@@ -4930,7 +4923,7 @@ class SlashCommands(commands.Cog):
                     await interaction.followup.send(f"❗ 오류 발생: `{str(error)}`", ephemeral=True)
             except:
                 # followup도 실패하면 콘솔에만 출력
-                print(f"Error handling failed: {error}")
+                logger.error(f"Error handling failed: {error}")
         else:
             # 아직 응답하지 않은 경우 response 사용
             try:
@@ -4939,7 +4932,7 @@ class SlashCommands(commands.Cog):
                 else:
                     await interaction.response.send_message(f"❗ 오류 발생: `{str(error)}`", ephemeral=True)
             except:
-                print(f"Error response failed: {error}")
+                logger.error(f"Error response failed: {error}")
 
     @app_commands.command(name="서버대기열", description="서버 접속 대기열 인원을 확인합니다")
     async def 서버대기열(self, interaction: discord.Interaction):

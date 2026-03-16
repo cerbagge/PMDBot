@@ -8,6 +8,11 @@
 import discord
 from discord import app_commands
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 
 def is_return_manager(interaction: discord.Interaction) -> bool:
     if interaction.user.guild_permissions.administrator:
@@ -29,6 +34,11 @@ def setup(bot):
     @app_commands.check(is_return_manager)
     async def 복귀확인(interaction: discord.Interaction, 유저: discord.Member):
         await interaction.response.defer(ephemeral=True)
+
+        if bot_logger:
+            bot_logger.log_command("복귀확인", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.RETURN,
+                                   target_user_id=유저.id, target_user_name=유저.name)
 
         try:
             from return_config_manager import return_config_manager

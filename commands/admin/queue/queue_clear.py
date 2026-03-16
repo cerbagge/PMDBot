@@ -6,6 +6,11 @@ from discord import app_commands
 
 # 안전한 import 처리
 try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
+try:
     from queue_manager import queue_manager
 except ImportError:
     # 더미 queue_manager 클래스 생성
@@ -39,6 +44,10 @@ def setup(bot):
     @app_commands.check(is_admin)
     async def 대기열초기화(interaction: discord.Interaction):
         """대기열 초기화 명령어"""
+        if bot_logger:
+            bot_logger.log_command("대기열초기화", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.QUEUE)
+
         cleared_count = queue_manager.clear_queue()
 
         embed = discord.Embed(

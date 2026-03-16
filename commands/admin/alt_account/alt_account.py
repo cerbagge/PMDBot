@@ -14,6 +14,11 @@ except ImportError:
     db_manager = None
     DATABASE_ENABLED = False
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 
 def is_admin(interaction: discord.Interaction) -> bool:
     """관리자 권한 체크"""
@@ -291,6 +296,11 @@ def setup(bot):
     ):
         """부계정 관리 - 관리자 전용"""
         await interaction.response.defer(ephemeral=True)
+
+        if bot_logger:
+            bot_logger.log_command("부계관리", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.ADMIN,
+                                   details={"기능": 기능})
 
         if not DATABASE_ENABLED:
             await interaction.followup.send(embed=discord.Embed(

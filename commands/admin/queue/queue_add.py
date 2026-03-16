@@ -3,6 +3,9 @@
 
 import discord
 from discord import app_commands
+from log_manager import get_logger
+
+logger = get_logger("queue_add")
 
 # 안전한 import 처리
 try:
@@ -15,6 +18,11 @@ except ImportError:
         def add_user(self, user_id): return True
         def clear_queue(self): return 0
     queue_manager = DummyQueueManager()
+
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
 
 try:
     from utils import format_estimated_time
@@ -80,7 +88,7 @@ def setup(bot):
             members.append(유저)
             target_name = 유저.display_name
             target_type = "유저"
-            print(f"✅ 유저 감지: {유저.display_name} ({유저.id})")
+            logger.info(f"유저 감지: {유저.display_name} ({유저.id})")
 
         elif 선택.value == "role":
             if not 역할:
@@ -94,7 +102,7 @@ def setup(bot):
             members.extend(역할.members)
             target_name = 역할.name
             target_type = "역할"
-            print(f"✅ 역할 감지: {역할.name} ({len(members)}명)")
+            logger.info(f"역할 감지: {역할.name} ({len(members)}명)")
 
             if not members:
                 await interaction.response.send_message(
@@ -103,10 +111,15 @@ def setup(bot):
                 )
                 return
 
-        print(f"📋 처리할 멤버 수: {len(members)}")
+        logger.info(f"처리할 멤버 수: {len(members)}")
 
         # 대기열 추가 처리
         await interaction.response.defer(thinking=True)
+
+        if bot_logger:
+            bot_logger.log_command("대기열추가", interaction.user.id, interaction.user.name,
+                                   source="admin_command", category=LogCategory.QUEUE_ADD,
+                                   details={"선택": 선택.value})
 
         added_count = 0
         already_in_queue = 0
@@ -116,12 +129,20 @@ def setup(bot):
             try:
                 if queue_manager.add_user(member.id):
                     added_count += 1
-                    print(f"✅ 대기열 추가: {member.display_name} ({member.id})")
+                    logger.info(f"대기열 추가: {member.display_name} ({member.id})")
+                    if bot_logger:
+                        bot_logger.log_queue(
+                            f"대기열 추가: {member.display_name}",
+                            user_id=interaction.user.id, user_name=interaction.user.name,
+                            target_user_id=member.id, target_user_name=member.display_name,
+                            source="admin_command", action="queue_add",
+                            command="대기열추가", details={"선택": 선택.value}
+                        )
                 else:
                     already_in_queue += 1
-                    print(f"ℹ️ 이미 대기 중: {member.display_name} ({member.id})")
+                    logger.info(f"이미 대기 중: {member.display_name} ({member.id})")
             except Exception as e:
-                print(f"❌ 대기열 추가 실패 ({member.display_name}): {e}")
+                logger.error(f"대기열 추가 실패 ({member.display_name}): {e}")
                 already_in_queue += 1
 
         # 결과 메시지 생성

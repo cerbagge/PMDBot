@@ -8,6 +8,11 @@ import datetime
 import json
 import re
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 
 # 관리자 권한 체크 함수
 def is_admin(interaction: discord.Interaction) -> bool:
@@ -505,6 +510,11 @@ def setup(bot):
 
             await interaction.response.defer(ephemeral=True)
 
+            if bot_logger:
+                bot_logger.log_command("경고관리", interaction.user.id, interaction.user.name,
+                                       source="admin_command", category=LogCategory.WARNING_SYS,
+                                       details={"기능": 기능})
+
             reason = 사유 or None
 
             if 경고id:
@@ -562,6 +572,11 @@ def setup(bot):
                 return
 
             await interaction.response.defer(ephemeral=True)
+
+            if bot_logger:
+                bot_logger.log_command("경고관리", interaction.user.id, interaction.user.name,
+                                       source="admin_command", category=LogCategory.WARNING_SYS,
+                                       details={"기능": 기능})
 
             # 역할 서열 체크 - 상위 관리자가 넣은 경고가 포함되어 있으면 차단
             user_warnings = db_manager.get_user_warnings(guild_id, 유저.id, active_only=True)

@@ -6,6 +6,11 @@ from discord import app_commands
 from typing import Literal, Optional
 import datetime
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 관리자 권한 체크 함수
 def is_admin(interaction: discord.Interaction) -> bool:
     """관리자 권한이 있거나 특정 역할을 가진 경우 허용"""
@@ -49,6 +54,11 @@ def setup(bot):
                 return
 
             await interaction.response.defer()
+
+            if bot_logger:
+                bot_logger.log_command("동맹설정", interaction.user.id, interaction.user.name,
+                                       source="admin_command", category=LogCategory.ALLIANCE,
+                                       details={"기능": 기능})
 
             # PE API로 국가/마을 자동 감지
             from pe_api_utils import pe_api

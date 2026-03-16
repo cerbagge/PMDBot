@@ -28,6 +28,11 @@ except ImportError:
     db_manager = None
     DATABASE_ENABLED = False
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 환경 변수
 MC_API_BASE = os.getenv("MC_API_BASE", "https://api.planetearth.kr")
 BASE_NATION = os.getenv("BASE_NATION", "Red_Mafia")
@@ -158,6 +163,13 @@ def setup(bot):
 
             # defer 호출 먼저 (DB 작업 및 API 조회 시간이 필요)
             await interaction.response.defer(ephemeral=True)
+
+            if bot_logger:
+                bot_logger.log_command("콜사인관리", interaction.user.id, interaction.user.name,
+                                       source="admin_command", category=LogCategory.CALLSIGN,
+                                       details={"기능": 기능, "대상": 유저.name if 유저 else None},
+                                       target_user_id=유저.id if 유저 else None,
+                                       target_user_name=유저.name if 유저 else None)
 
             # 기존 콜사인 확인
             old_callsign = callsign_manager.get_callsign(유저.id)
@@ -646,6 +658,11 @@ def setup(bot):
         elif 기능 == "데이터_백업":  # 기존: 백업생성
             await interaction.response.defer()
 
+            if bot_logger:
+                bot_logger.log_command("콜사인관리", interaction.user.id, interaction.user.name,
+                                       source="admin_command", category=LogCategory.CALLSIGN,
+                                       details={"기능": 기능})
+
             # 백업 관리자 가져오기
             backup_manager = None
             if hasattr(bot, 'backup_manager'):
@@ -808,6 +825,11 @@ def setup(bot):
                 return
 
             await interaction.response.defer()
+
+            if bot_logger:
+                bot_logger.log_command("콜사인관리", interaction.user.id, interaction.user.name,
+                                       source="admin_command", category=LogCategory.CALLSIGN,
+                                       details={"기능": 기능})
 
             backup_path = os.path.join(backup_manager.backup_dir, 텍스트)
             success, message = backup_manager.restore_backup(backup_path)

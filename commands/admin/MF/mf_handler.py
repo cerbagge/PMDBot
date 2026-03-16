@@ -5,6 +5,14 @@ import discord
 import re
 import aiohttp
 from datetime import datetime
+from log_manager import get_logger
+
+logger = get_logger("mf_handler")
+
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
 
 
 # 국가 이름을 특수 대문자로 변환 (Mathematical Bold Sans-Serif)
@@ -54,11 +62,14 @@ async def message_handler(bot, message):
         if not mf_line:
             return False
 
+        if bot_logger:
+            bot_logger.log_command("MF", message.author.id, message.author.name, source="mf_handler", category=LogCategory.ADMIN, details={"content": message.content[:200]})
+
         # &MF 제거하고 나머지 텍스트 추출
         content = mf_line[3:].strip()
 
-        print(f"[MF] 명령어 감지! (봇: {message.author.name})")
-        print(f"[MF] 원본: {mf_line}")
+        logger.info(f"명령어 감지 (봇: {message.author.name})")
+        logger.debug(f"원본: {mf_line}")
 
         # {연동} 키워드 확인
         is_link_command = '{연동}' in content
@@ -91,11 +102,11 @@ async def message_handler(bot, message):
                 return True
             discord_id = int(discord_id_match.group(1))
 
-        print(f"[MF] Discord ID: {discord_id}")
+        logger.info(f"Discord ID: {discord_id}")
 
         # {대기열} 명령어 처리 (모든 봇에서 동작)
         if is_queue_command:
-            print(f"[MF] 대기열 추가: {discord_id}")
+            logger.info(f"대기열 추가: {discord_id}")
             try:
                 from queue_manager import queue_manager
 
@@ -109,12 +120,20 @@ async def message_handler(bot, message):
                 if last_request_time:
                     time_diff = (current_time - last_request_time).total_seconds()
                     if time_diff < 5:
-                        print(f"[MF] 중복 요청 무시: {discord_id}")
+                        logger.debug(f"중복 요청 무시: {discord_id}")
                         return True
 
                 if queue_manager.add_user(discord_id):
                     bot._last_queue_request[discord_id] = current_time
                     current_queue_size = queue_manager.get_queue_size()
+                    if bot_logger:
+                        bot_logger.log_queue(
+                            f"MF 핸들러 대기열 추가: {discord_id}",
+                            user_id=message.author.id, user_name=message.author.name,
+                            target_user_id=discord_id,
+                            source="mf_handler", action="queue_add",
+                            command="&MF {대기열}", details={"triggered_by": message.author.name}
+                        )
                     await message.channel.send(
                         f"대기열에 추가되었습니다!\n"
                         f"Discord ID: `{discord_id}`\n"
@@ -189,7 +208,7 @@ async def message_handler(bot, message):
             new_channel_name = new_channel_name.replace('{TT}', town_name)
             new_channel_name = new_channel_name.replace('{MC}', minecraft_name)
 
-            print(f"[MF] 채널 이름 형식: {format_string} -> {new_channel_name}")
+            logger.info(f"채널 이름 형식: {format_string} -> {new_channel_name}")
 
         else:
             # 기본 대사관 형식
@@ -222,21 +241,18 @@ async def message_handler(bot, message):
             info_lines.append(f"변경: `{old_name}` -> `{new_channel_name}`")
 
             await message.channel.send("\n".join(info_lines))
-            print(f"[MF] 채널 이름 변경: {old_name} -> {new_channel_name}")
+            logger.info(f"채널 이름 변경: {old_name} -> {new_channel_name}")
 
         except discord.Forbidden:
             await message.channel.send("채널 이름을 변경할 권한이 없습니다.")
         except Exception as e:
             await message.channel.send(f"채널 이름 변경 오류: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"채널 이름 변경 오류: {e}", exc_info=True)
 
         return True
 
     except Exception as e:
-        print(f"[MF] 핸들러 오류: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"핸들러 오류: {e}", exc_info=True)
         return False
 
 
@@ -281,7 +297,7 @@ async def _handle_link_command(bot, message, content):
             )
             return True
 
-        print(f"[MF] 연동 요청: Discord {discord_id} ← MC {mc_nick}")
+        logger.info(f"연동 요청: Discord {discord_id} <- MC {mc_nick}")
 
         # 1. Mojang API로 UUID 조회
         uuid = None
@@ -314,7 +330,7 @@ async def _handle_link_command(bot, message, content):
             await message.channel.send(f"`{mc_nick}`의 UUID를 가져올 수 없습니다.")
             return True
 
-        print(f"[MF] Mojang UUID 조회 성공: {mc_nick} → {uuid}")
+        logger.info(f"Mojang UUID 조회 성공: {mc_nick} -> {uuid}")
 
         # 2. DB에 저장
         try:
@@ -353,12 +369,10 @@ async def _handle_link_command(bot, message, content):
         embed.set_footer(text="대기열 처리 시 PlanetEarth API 조회를 건너뜁니다")
 
         await message.channel.send(embed=embed)
-        print(f"[MF] 연동 완료: {discord_id} ← {mc_nick} ({uuid[:8]}...)")
+        logger.info(f"연동 완료: {discord_id} <- {mc_nick} ({uuid[:8]}...)")
         return True
 
     except Exception as e:
-        print(f"[MF] 연동 명령어 오류: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"연동 명령어 오류: {e}", exc_info=True)
         await message.channel.send(f"연동 처리 중 오류: {e}")
         return True

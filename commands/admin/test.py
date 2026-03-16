@@ -35,6 +35,11 @@ except ImportError:
     callsign_manager = None
     CALLSIGN_ENABLED = False
 
+try:
+    from log_manager import bot_logger, LogCategory
+except ImportError:
+    bot_logger = None
+
 # 환경 변수
 MC_API_BASE = os.getenv("MC_API_BASE", "https://api.planetearth.kr")
 BASE_NATION = os.getenv("BASE_NATION", "Red_Mafia")
@@ -67,6 +72,9 @@ def setup(bot):
     async def 테스트(interaction: discord.Interaction):
         """봇 테스트 명령어"""
         await interaction.response.defer(thinking=True)
+
+        if bot_logger:
+            bot_logger.log_command("테스트", interaction.user.id, interaction.user.name, source="admin_command", category=LogCategory.COMMAND)
 
         embed = discord.Embed(
             title="🧪 봇 테스트 결과",
