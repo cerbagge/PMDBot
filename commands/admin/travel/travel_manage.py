@@ -217,6 +217,49 @@ class AdminTravelAddModal(ui.Modal, title="여행 추가"):
                 role_type = "국민(조직원)" if is_base else "외국인"
                 role_change_msg = f"\n🏷️ 원래 국가: **{orig_nation}** → **{role_type}** 역할 적용됨"
 
+            # 여행 신청 채널에 승인 메시지 전송 (유저 신청 승인과 동일한 형태)
+            request_channel_id = travel_config_manager.get_request_channel()
+            if request_channel_id and interaction.guild:
+                request_channel = interaction.guild.get_channel(request_channel_id)
+                if request_channel:
+                    try:
+                        from commands.user.travel.travel_request import TravelAdminControlView
+
+                        admin_embed = discord.Embed(
+                            title="✈️ 여행 신청 - 승인됨",
+                            description=f"{self.target_user.mention}님이 여행을 신청했습니다.",
+                            color=0x00ff00
+                        )
+                        admin_embed.add_field(name="신청 ID", value=f"`{travel_id}`", inline=True)
+                        admin_embed.add_field(name="신청자", value=self.target_user.mention, inline=True)
+                        admin_embed.add_field(name="마크 닉네임", value=self.user_info.get('minecraft_name', '알 수 없음'), inline=True)
+                        admin_embed.add_field(name="콜사인", value=self.user_info.get('callsign') or '없음', inline=True)
+                        admin_embed.add_field(name="현재 국가", value=self.user_info.get('nation', '알 수 없음'), inline=True)
+                        admin_embed.add_field(name="현재 마을", value=self.user_info.get('town', '알 수 없음'), inline=True)
+                        admin_embed.add_field(name="목적지 국가", value=self.destination.value.strip(), inline=True)
+                        admin_embed.add_field(name="여행 기간", value=f"{self.start_date.value} ~ {self.end_date.value}", inline=True)
+                        admin_embed.add_field(name="여행 일수", value=f"{travel_days}일", inline=True)
+                        admin_embed.add_field(name="처리 결과", value=f"**승인됨** by {self.admin.mention}", inline=False)
+                        admin_embed.set_thumbnail(url=self.target_user.display_avatar.url)
+                        admin_embed.set_footer(text=f"신청 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+                        # 관리 역할 멘션
+                        manager_roles = travel_config_manager.get_manager_roles()
+                        role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles]) if manager_roles else ""
+
+                        # 취소/종료 버튼
+                        admin_view = TravelAdminControlView(travel_id, self.target_user.id)
+                        msg = await request_channel.send(
+                            content=role_mentions if role_mentions else None,
+                            embed=admin_embed,
+                            view=admin_view
+                        )
+
+                        # 메시지 ID 저장
+                        travel_manager.update_message_id(travel_id, msg.id)
+                    except Exception as e:
+                        print(f"[TRAVEL] 신청 채널 메시지 전송 실패: {e}")
+
             # 대상 유저에게 DM 전송
             try:
                 dm_embed = discord.Embed(
