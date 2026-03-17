@@ -2285,7 +2285,7 @@ async def _fetch_joined_town_at(session, uuid: str) -> int:
 
 
 async def process_queue_batch(bot, queue_index: int = 0):
-    """특정 대기열에서 사용자들을 배치로 처리 - 429 오류 처리 추가, 20명 이상 시 Bulk 모드"""
+    """특정 대기열에서 사용자들을 배치로 처리 - 429 오류 처리 추가, 개별 API 조회 방식"""
     try:
         # 속도 제한 상태 확인
         if is_rate_limited():
@@ -2303,23 +2303,7 @@ async def process_queue_batch(bot, queue_index: int = 0):
         if queue_size_before == 0:
             return
 
-        # === 20명 이상이면 Bulk 모드로 전환 ===
-        total_queue_size = queue_manager.get_queue_size()  # 전체 대기열 크기
-        if total_queue_size >= 20 and BULK_ENABLED and bulk_data_manager and bulk_data_manager.is_data_available():
-            logger.info(f"[Q{queue_index+1}] 전체 대기열 {total_queue_size}명 >= 20명 → BULK 모드 전환")
-            queue_manager.set_processing(queue_index, True)
-            try:
-                await process_users_bulk(bot, queue_index)
-            finally:
-                queue_manager.set_processing(queue_index, False)
-
-            # Bulk 처리 후 대기열 완료 체크
-            queue_size_after = queue_manager.get_queue_size()
-            if queue_size_after == 0 and queue_size_before > 0:
-                await _send_queue_complete_message(bot, queue_size_before)
-            return
-
-        # === 기존 방식: 20명 미만 개별 처리 ===
+        # === 개별 API 조회 처리 ===
         logger.info(f"[Q{queue_index+1}] 대기열 배치 처리 시작 (대기: {queue_size_before}명)")
         queue_manager.set_processing(queue_index, True)
 

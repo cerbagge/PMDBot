@@ -147,6 +147,44 @@ class TravelConfigManager:
             "panel_message_id": self.config.get("panel_message_id")
         }
 
+    # ===== 블랙리스트 =====
+
+    def add_blacklist(self, discord_id: int, added_by: int, reason: str = None) -> bool:
+        """블랙리스트 추가"""
+        blacklist = self.config.setdefault("blacklist", {})
+        blacklist[str(discord_id)] = {
+            "added_at": datetime.now().isoformat(),
+            "added_by": added_by,
+            "reason": reason
+        }
+        success = self._save_config()
+        if success:
+            print(f"[OK] 여행 블랙리스트 추가: {discord_id}")
+        return success
+
+    def remove_blacklist(self, discord_id: int) -> bool:
+        """블랙리스트 제거"""
+        blacklist = self.config.get("blacklist", {})
+        if str(discord_id) in blacklist:
+            del blacklist[str(discord_id)]
+            success = self._save_config()
+            if success:
+                print(f"[OK] 여행 블랙리스트 제거: {discord_id}")
+            return success
+        return False
+
+    def is_blacklisted(self, discord_id: int) -> bool:
+        """블랙리스트 여부 확인"""
+        return str(discord_id) in self.config.get("blacklist", {})
+
+    def get_blacklist_info(self, discord_id: int) -> Optional[Dict]:
+        """블랙리스트 정보 조회"""
+        return self.config.get("blacklist", {}).get(str(discord_id))
+
+    def get_all_blacklist(self) -> Dict:
+        """전체 블랙리스트 조회"""
+        return self.config.get("blacklist", {})
+
     # ===== 여행 신청 패널 설정 =====
 
     def set_panel_info(self, channel_id: int, message_id: int) -> bool:

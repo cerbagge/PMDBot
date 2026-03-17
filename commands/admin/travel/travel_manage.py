@@ -330,8 +330,9 @@ def setup(bot):
         기능="설정할 기능을 선택하세요",
         채널="채널 (채널/로그_채널 설정 시)",
         역할="역할 (역할 설정/제거 시)",
-        유저="유저 (여행추가/여행종료 기능 사용 시)",
-        id="여행 ID (여행종료 기능 사용 시, 예: T000001)"
+        유저="유저 (여행추가/여행종료/블랙추가/블랙제거 시)",
+        id="여행 ID (여행종료 기능 사용 시, 예: T000001)",
+        사유="사유 (블랙추가 시)"
     )
     @app_commands.choices(기능=[
         app_commands.Choice(name="여행추가", value="여행추가"),
@@ -347,6 +348,9 @@ def setup(bot):
         app_commands.Choice(name="현황", value="현황"),
         app_commands.Choice(name="대기목록", value="대기목록"),
         app_commands.Choice(name="활성목록", value="활성목록"),
+        app_commands.Choice(name="블랙추가", value="블랙추가"),
+        app_commands.Choice(name="블랙제거", value="블랙제거"),
+        app_commands.Choice(name="블랙목록", value="블랙목록"),
     ])
     @app_commands.check(is_admin)
     async def 여행관리(
@@ -355,7 +359,8 @@ def setup(bot):
         채널: discord.TextChannel = None,
         역할: discord.Role = None,
         유저: discord.Member = None,
-        id: str = None
+        id: str = None,
+        사유: str = None
     ):
         """여행 시스템 관리"""
         if bot_logger:
@@ -444,6 +449,16 @@ def setup(bot):
             if not user_info:
                 await interaction.response.send_message(
                     f"❌ {유저.mention}의 등록된 정보가 없습니다.",
+                    ephemeral=True
+                )
+                return
+
+            # 블랙리스트 확인
+            if travel_config_manager.is_blacklisted(유저.id):
+                bl_info = travel_config_manager.get_blacklist_info(유저.id)
+                reason_text = f"\n사유: {bl_info['reason']}" if bl_info and bl_info.get('reason') else ""
+                await interaction.response.send_message(
+                    f"❌ {유저.mention}은(는) 여행 블랙리스트에 등록되어 있습니다.{reason_text}",
                     ephemeral=True
                 )
                 return
@@ -1021,6 +1036,90 @@ def setup(bot):
                     )
 
                 embed.set_footer(text="여행 종료: /여행관리 기능:여행종료 id:T000001")
+                await interaction.followup.send(embed=embed, ephemeral=True)
+
+            elif 기능.value == "블랙추가":
+                if not 유저:
+                    await interaction.followup.send("❌ 블랙리스트에 추가할 유저를 지정해주세요.", ephemeral=True)
+                    return
+
+                if travel_config_manager.is_blacklisted(유저.id):
+                    await interaction.followup.send(
+                        f"⚠️ {유저.mention}은(는) 이미 블랙리스트에 등록되어 있습니다.",
+                        ephemeral=True
+                    )
+                    return
+
+                success = travel_config_manager.add_blacklist(유저.id, interaction.user.id, 사유)
+
+                if success:
+                    embed = discord.Embed(
+                        title="✅ 여행 블랙리스트 추가 완료",
+                        description=f"{유저.mention}이(가) 여행 블랙리스트에 추가되었습니다.",
+                        color=0xff0000
+                    )
+                    embed.add_field(name="대상자", value=유저.mention, inline=True)
+                    embed.add_field(name="등록자", value=interaction.user.mention, inline=True)
+                    if 사유:
+                        embed.add_field(name="사유", value=사유, inline=False)
+                    embed.set_footer(text=f"등록 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ 블랙리스트 추가에 실패했습니다.", ephemeral=True)
+
+            elif 기능.value == "블랙제거":
+                if not 유저:
+                    await interaction.followup.send("❌ 블랙리스트에서 제거할 유저를 지정해주세요.", ephemeral=True)
+                    return
+
+                if not travel_config_manager.is_blacklisted(유저.id):
+                    await interaction.followup.send(
+                        f"⚠️ {유저.mention}은(는) 블랙리스트에 등록되어 있지 않습니다.",
+                        ephemeral=True
+                    )
+                    return
+
+                success = travel_config_manager.remove_blacklist(유저.id)
+
+                if success:
+                    embed = discord.Embed(
+                        title="✅ 여행 블랙리스트 제거 완료",
+                        description=f"{유저.mention}이(가) 여행 블랙리스트에서 제거되었습니다.",
+                        color=0x00ff00
+                    )
+                    embed.add_field(name="대상자", value=유저.mention, inline=True)
+                    embed.add_field(name="처리자", value=interaction.user.mention, inline=True)
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ 블랙리스트 제거에 실패했습니다.", ephemeral=True)
+
+            elif 기능.value == "블랙목록":
+                blacklist = travel_config_manager.get_all_blacklist()
+
+                if not blacklist:
+                    await interaction.followup.send("📋 여행 블랙리스트가 비어 있습니다.", ephemeral=True)
+                    return
+
+                embed = discord.Embed(
+                    title=f"🚫 여행 블랙리스트 ({len(blacklist)}명)",
+                    color=0xff0000
+                )
+
+                for discord_id_str, info in list(blacklist.items())[:20]:
+                    reason = info.get('reason') or '사유 없음'
+                    added_at = info.get('added_at', '?')[:10]
+                    added_by = info.get('added_by')
+                    by_text = f"<@{added_by}>" if added_by else "알 수 없음"
+
+                    embed.add_field(
+                        name=f"<@{discord_id_str}>",
+                        value=f"• 사유: {reason}\n• 등록자: {by_text}\n• 등록일: {added_at}",
+                        inline=False
+                    )
+
+                if len(blacklist) > 20:
+                    embed.set_footer(text=f"총 {len(blacklist)}명 중 20명만 표시됩니다.")
+
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
         except Exception as e:

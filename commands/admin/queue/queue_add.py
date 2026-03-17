@@ -176,7 +176,7 @@ def setup(bot):
             time_str = format_estimated_time(current_queue_size)
             embed.add_field(
                 name="⏰ 예상 처리 시간",
-                value=f"{time_str}\n대기열이 10명 이상이면 자동으로 처리가 시작됩니다.",
+                value=f"{time_str}\n1분 간격으로 자동 처리됩니다.",
                 inline=False
             )
 

@@ -47,6 +47,16 @@ class TravelRequestModal(ui.Modal, title="여행 신청"):
             from travel_manager import travel_manager, travel_config_manager, TravelStatus
             from database_manager import db_manager
 
+            # 블랙리스트 확인
+            if travel_config_manager.is_blacklisted(interaction.user.id):
+                bl_info = travel_config_manager.get_blacklist_info(interaction.user.id)
+                reason_text = f"\n사유: {bl_info['reason']}" if bl_info and bl_info.get('reason') else ""
+                await interaction.followup.send(
+                    f"❌ 여행 블랙리스트에 등록되어 여행 신청이 불가능합니다.{reason_text}",
+                    ephemeral=True
+                )
+                return
+
             # 날짜 검증
             date_pattern = r'^\d{4}\.\d{2}\.\d{2}$'
 
@@ -206,6 +216,16 @@ class TravelRequestForeignerModal(ui.Modal, title="여행 신청"):
 
         try:
             from travel_manager import travel_manager, travel_config_manager
+
+            # 블랙리스트 확인
+            if travel_config_manager.is_blacklisted(interaction.user.id):
+                bl_info = travel_config_manager.get_blacklist_info(interaction.user.id)
+                reason_text = f"\n사유: {bl_info['reason']}" if bl_info and bl_info.get('reason') else ""
+                await interaction.followup.send(
+                    f"❌ 여행 블랙리스트에 등록되어 여행 신청이 불가능합니다.{reason_text}",
+                    ephemeral=True
+                )
+                return
 
             # 날짜 검증
             date_pattern = r'^\d{4}\.\d{2}\.\d{2}$'
@@ -1315,6 +1335,16 @@ class TravelPanelView(ui.View):
             if not travel_config_manager.is_enabled():
                 await interaction.response.send_message(
                     "❌ 여행 시스템이 비활성화되어 있습니다.",
+                    ephemeral=True
+                )
+                return
+
+            # 블랙리스트 확인
+            if travel_config_manager.is_blacklisted(interaction.user.id):
+                bl_info = travel_config_manager.get_blacklist_info(interaction.user.id)
+                reason_text = f"\n사유: {bl_info['reason']}" if bl_info and bl_info.get('reason') else ""
+                await interaction.response.send_message(
+                    f"❌ 여행 블랙리스트에 등록되어 여행 신청이 불가능합니다.{reason_text}",
                     ephemeral=True
                 )
                 return

@@ -148,6 +148,11 @@ class LogManager:
                     )
                 '''))
 
+                # 기존 테이블에 source/action 컬럼이 없을 수 있으므로 인덱스보다 먼저 추가
+                self.adapter.add_column_safe(cursor, 'logs', 'source', 'TEXT')
+                self.adapter.add_column_safe(cursor, 'logs', 'action', 'TEXT')
+                conn.commit()
+
                 # 인덱스 생성 (조회 성능 향상)
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON logs(timestamp DESC)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_level ON logs(level)')
@@ -156,10 +161,6 @@ class LogManager:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_time ON logs(time)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_source ON logs(source)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_action ON logs(action)')
-
-                # 기존 테이블에 source/action 컬럼이 없을 수 있으므로 안전하게 추가
-                self.adapter.add_column_safe(cursor, 'logs', 'source', 'TEXT')
-                self.adapter.add_column_safe(cursor, 'logs', 'action', 'TEXT')
 
                 conn.commit()
 
