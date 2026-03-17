@@ -182,6 +182,119 @@ class AnnouncementModal(discord.ui.Modal, title="📢 공지 작성"):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+def parse_message_link(link: str):
+    """
+    디스코드 메시지 링크 파싱
+    형식: https://discord.com/channels/{guild_id}/{channel_id}/{message_id}
+    Returns: (guild_id, channel_id, message_id) or None
+    """
+    pattern = r'https?://(?:ptb\.|canary\.)?discord(?:app)?\.com/channels/(\d+)/(\d+)/(\d+)'
+    match = re.match(pattern, link.strip())
+    if match:
+        return int(match.group(1)), int(match.group(2)), int(match.group(3))
+    return None
+
+
+# ===== 공지 수정 Modal (이미 전송된 메시지) =====
+class AnnouncementEditModal(discord.ui.Modal, title="📝 공지 수정"):
+    """이미 전송된 공지를 수정하는 Modal"""
+
+    텍스트 = discord.ui.TextInput(
+        label="수정할 내용",
+        style=discord.TextStyle.paragraph,
+        placeholder="수정할 내용을 입력하세요...",
+        required=True,
+        max_length=2000
+    )
+
+    def __init__(self, message: discord.Message):
+        super().__init__()
+        self.target_message = message
+        self.텍스트.default = message.content
+
+    async def on_submit(self, interaction: discord.Interaction):
+        new_text = self.텍스트.value.replace("\\n", "\n")
+        try:
+            await self.target_message.edit(content=new_text)
+            embed = discord.Embed(
+                title="✅ 공지 수정 완료",
+                description="공지가 수정되었습니다.",
+                color=0x00ff00
+            )
+            embed.add_field(name="📍 채널", value=f"<#{self.target_message.channel.id}>", inline=True)
+            embed.add_field(
+                name="📝 수정된 내용 미리보기",
+                value=new_text[:100] + ("..." if len(new_text) > 100 else ""),
+                inline=False
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except discord.Forbidden:
+            embed = discord.Embed(
+                title="❌ 수정 실패",
+                description="해당 메시지를 수정할 권한이 없습니다.\n봇이 보낸 메시지만 수정할 수 있습니다.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            embed = discord.Embed(
+                title="❌ 오류 발생",
+                description=f"공지 수정 중 오류가 발생했습니다.\n{str(e)[:100]}",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ===== 예약 공지 수정 Modal =====
+class ScheduledAnnouncementEditModal(discord.ui.Modal, title="📝 예약 공지 수정"):
+    """예약된 공지를 수정하는 Modal"""
+
+    텍스트 = discord.ui.TextInput(
+        label="수정할 내용",
+        style=discord.TextStyle.paragraph,
+        placeholder="수정할 내용을 입력하세요...",
+        required=True,
+        max_length=2000
+    )
+
+    def __init__(self, schedule_id: str, current_text: str):
+        super().__init__()
+        self.schedule_id = schedule_id
+        self.텍스트.default = current_text
+
+    async def on_submit(self, interaction: discord.Interaction):
+        new_text = self.텍스트.value.replace("\\n", "\n")
+        try:
+            from announcement_scheduler import announcement_schedule_manager
+
+            success = announcement_schedule_manager.update_schedule_text(self.schedule_id, new_text)
+            if success:
+                embed = discord.Embed(
+                    title="✅ 예약 공지 수정 완료",
+                    description=f"예약 `{self.schedule_id}`의 내용이 수정되었습니다.",
+                    color=0x00ff00
+                )
+                embed.add_field(
+                    name="📝 수정된 내용 미리보기",
+                    value=new_text[:100] + ("..." if len(new_text) > 100 else ""),
+                    inline=False
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            else:
+                embed = discord.Embed(
+                    title="❌ 수정 실패",
+                    description=f"예약 `{self.schedule_id}`을(를) 찾을 수 없습니다.",
+                    color=0xff0000
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+        except ImportError:
+            embed = discord.Embed(
+                title="❌ 오류",
+                description="announcement_scheduler 모듈을 로드할 수 없습니다.",
+                color=0xff0000
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 def setup(bot):
     """봇에 /공지 및 /공지관리 명령어 등록"""
 
@@ -231,20 +344,23 @@ def setup(bot):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ===== /공지관리 명령어 =====
-    @bot.tree.command(name="공지관리", description="예약된 공지를 확인하거나 취소합니다")
+    @bot.tree.command(name="공지관리", description="예약된 공지를 확인, 취소, 수정합니다")
     @app_commands.describe(
         기능="기능을 선택하세요",
-        예약id="취소할 예약 ID (취소 시 필수)"
+        예약id="예약 ID (취소/수정 시 필수)",
+        메시지링크="수정할 메시지 링크 (전송된 공지 수정 시 사용)"
     )
     @app_commands.choices(기능=[
         app_commands.Choice(name="목록", value="목록"),
         app_commands.Choice(name="취소", value="취소"),
+        app_commands.Choice(name="수정", value="수정"),
     ])
     @app_commands.check(is_admin)
     async def 공지관리(
         interaction: discord.Interaction,
         기능: app_commands.Choice[str],
-        예약id: str = None
+        예약id: str = None,
+        메시지링크: str = None
     ):
         """공지 예약 관리 명령어"""
         if bot_logger:
@@ -294,7 +410,7 @@ def setup(bot):
                         inline=False
                     )
 
-                embed.set_footer(text="취소하려면: /공지관리 기능:취소 예약id:<ID>")
+                embed.set_footer(text="취소: /공지관리 기능:취소 예약id:<ID> | 수정: /공지관리 기능:수정 예약id:<ID>")
                 await interaction.response.send_message(embed=embed, ephemeral=True)
 
             elif 기능.value == "취소":
@@ -322,6 +438,96 @@ def setup(bot):
                         color=0xff0000
                     )
                 await interaction.response.send_message(embed=embed, ephemeral=True)
+
+            elif 기능.value == "수정":
+                # 메시지링크가 있으면 → 이미 전송된 공지 수정
+                if 메시지링크:
+                    parsed = parse_message_link(메시지링크)
+                    if not parsed:
+                        embed = discord.Embed(
+                            title="❌ 링크 오류",
+                            description="올바른 디스코드 메시지 링크를 입력해주세요.\n형식: `https://discord.com/channels/서버ID/채널ID/메시지ID`",
+                            color=0xff0000
+                        )
+                        await interaction.response.send_message(embed=embed, ephemeral=True)
+                        return
+
+                    guild_id, channel_id, message_id = parsed
+
+                    if guild_id != interaction.guild.id:
+                        embed = discord.Embed(
+                            title="❌ 오류",
+                            description="다른 서버의 메시지는 수정할 수 없습니다.",
+                            color=0xff0000
+                        )
+                        await interaction.response.send_message(embed=embed, ephemeral=True)
+                        return
+
+                    channel = bot.get_channel(channel_id)
+                    if not channel:
+                        embed = discord.Embed(
+                            title="❌ 오류",
+                            description="채널을 찾을 수 없습니다.",
+                            color=0xff0000
+                        )
+                        await interaction.response.send_message(embed=embed, ephemeral=True)
+                        return
+
+                    try:
+                        message = await channel.fetch_message(message_id)
+                    except discord.NotFound:
+                        embed = discord.Embed(
+                            title="❌ 오류",
+                            description="메시지를 찾을 수 없습니다.",
+                            color=0xff0000
+                        )
+                        await interaction.response.send_message(embed=embed, ephemeral=True)
+                        return
+                    except discord.Forbidden:
+                        embed = discord.Embed(
+                            title="❌ 오류",
+                            description="해당 채널의 메시지를 읽을 권한이 없습니다.",
+                            color=0xff0000
+                        )
+                        await interaction.response.send_message(embed=embed, ephemeral=True)
+                        return
+
+                    if message.author.id != bot.user.id:
+                        embed = discord.Embed(
+                            title="❌ 오류",
+                            description="봇이 보낸 메시지만 수정할 수 있습니다.",
+                            color=0xff0000
+                        )
+                        await interaction.response.send_message(embed=embed, ephemeral=True)
+                        return
+
+                    modal = AnnouncementEditModal(message)
+                    await interaction.response.send_modal(modal)
+
+                # 예약id가 있으면 → 예약된 공지 수정
+                elif 예약id:
+                    schedule = announcement_schedule_manager.get_schedule(예약id)
+                    if not schedule:
+                        embed = discord.Embed(
+                            title="❌ 오류",
+                            description=f"예약 `{예약id}`을(를) 찾을 수 없습니다.\n`/공지관리 기능:목록`으로 ID를 확인해주세요.",
+                            color=0xff0000
+                        )
+                        await interaction.response.send_message(embed=embed, ephemeral=True)
+                        return
+
+                    modal = ScheduledAnnouncementEditModal(예약id, schedule["text"])
+                    await interaction.response.send_modal(modal)
+
+                else:
+                    embed = discord.Embed(
+                        title="❌ 오류",
+                        description="수정하려면 **메시지링크** 또는 **예약id** 중 하나를 입력해주세요.\n"
+                                    "- 이미 전송된 공지: `메시지링크` 파라미터에 메시지 링크 입력\n"
+                                    "- 예약된 공지: `예약id` 파라미터에 예약 ID 입력",
+                        color=0xff0000
+                    )
+                    await interaction.response.send_message(embed=embed, ephemeral=True)
 
         except ImportError:
             embed = discord.Embed(

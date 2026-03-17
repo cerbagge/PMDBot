@@ -90,6 +90,27 @@ class AnnouncementScheduleManager:
                 print(f"[WARN] 잘못된 예약 시간 형식: {s.get('scheduled_time')}")
         return due
 
+    def get_schedule(self, schedule_id: str) -> Optional[dict]:
+        """ID로 예약 조회"""
+        for s in self.schedules:
+            if s["id"] == schedule_id:
+                return dict(s)
+        return None
+
+    def update_schedule_text(self, schedule_id: str, new_text: str) -> bool:
+        """예약 텍스트 수정"""
+        for s in self.schedules:
+            if s["id"] == schedule_id:
+                old_text = s["text"]
+                s["text"] = new_text
+                if self._save_schedules():
+                    print(f"[ANNOUNCE] 공지 예약 수정: {schedule_id}")
+                    return True
+                else:
+                    s["text"] = old_text
+                    return False
+        return False
+
     def get_all_schedules(self) -> List[dict]:
         """모든 예약 반환"""
         return list(self.schedules)
