@@ -402,7 +402,6 @@ class BulkDataManager:
 
             # BASE_NATION UUID로 국가 이름 변경 자동 감지 및 갱신 + JSON 저장
             try:
-                from config import config
                 base_nation_uuid = getattr(config, 'BASE_NATION_UUID', None)
                 if base_nation_uuid and base_nation_uuid in self.nation_data:
                     nation_info = self.nation_data[base_nation_uuid]
@@ -732,8 +731,6 @@ class BulkDataManager:
             return
 
         try:
-            from config import config
-
             # 길드 가져오기
             guild = self._bot.get_guild(config.GUILD_ID)
             if not guild:
@@ -1357,7 +1354,6 @@ class BulkDataManager:
         2주가 지난 뉴비들의 역할을 자동으로 제거
         """
         try:
-            from config import config
             from database_manager import db_manager
 
             # 길드 가져오기
