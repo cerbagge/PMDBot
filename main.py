@@ -625,26 +625,48 @@ async def on_ready():
 
     # ===== 7단계: 시작 알림 전송 =====
     try:
-        import subprocess
-        from datetime import timezone
+        import aiohttp
+        from version import VERSION, GITHUB_REPO
 
+        # GitHub 최신 릴리즈 확인
+        latest_version = None
+        release_url = None
         try:
-            git_hash = subprocess.check_output(
-                ["git", "rev-parse", "--short", "HEAD"],
-                stderr=subprocess.DEVNULL
-            ).decode().strip()
+            async with aiohttp.ClientSession(headers={"User-Agent": config.USER_AGENT}) as session:
+                async with session.get(
+                    f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        latest_version = data.get("tag_name", "").lstrip("v")
+                        release_url = data.get("html_url")
         except Exception:
-            git_hash = "unknown"
+            pass
 
         log_channel = bot.get_channel(config.LOG_CHANNEL_ID)
         if log_channel:
+            is_latest = latest_version is None or latest_version == VERSION
+
             embed = discord.Embed(
                 title="🟢 봇 시작됨",
-                color=0x57F287,
+                color=0x57F287 if is_latest else 0xFEE75C,
                 timestamp=discord.utils.utcnow()
             )
-            embed.add_field(name="버전", value=f"`{git_hash}`", inline=True)
-            embed.add_field(name="User-Agent", value=f"`{config.USER_AGENT}`", inline=True)
+            embed.add_field(name="현재 버전", value=f"`v{VERSION}`", inline=True)
+
+            if latest_version:
+                if is_latest:
+                    embed.add_field(name="최신 버전", value=f"`v{latest_version}` ✅", inline=True)
+                else:
+                    embed.add_field(
+                        name="최신 버전",
+                        value=f"`v{latest_version}` ⬆️ [업데이트]({release_url})" if release_url else f"`v{latest_version}` ⬆️ 업데이트 필요",
+                        inline=True
+                    )
+            else:
+                embed.add_field(name="최신 버전", value="확인 실패", inline=True)
+
             embed.add_field(name="서버", value=f"`{config.BASE_NATION}`", inline=True)
             await log_channel.send(embed=embed)
     except Exception as e:
