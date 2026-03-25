@@ -55,6 +55,8 @@ class Config:
 
         # API 설정
         self.MC_API_BASE = self._get_env("MC_API_BASE", "https://api.planetearth.kr")
+        self.DEV_MINECRAFT_NAME = self._get_env("DEV_MINECRAFT_NAME", "nothing")
+        self.USER_AGENT = f"PEBot/{self.DEV_MINECRAFT_NAME}"
         
         # Discord 서버 설정
         self.GUILD_ID = self._get_env_int("GUILD_ID")
@@ -144,6 +146,7 @@ class Config:
         config_items = [
             ("DISCORD_TOKEN", "✅ 설정됨" if self.DISCORD_TOKEN else "❌ 누락"),
             ("MC_API_BASE", self.MC_API_BASE),
+            ("USER_AGENT", self.USER_AGENT),
             ("GUILD_ID", self.GUILD_ID),
             ("SUCCESS_ROLE_ID", self.SUCCESS_ROLE_ID),
             ("SUCCESS_ROLE_ID_OUT", self.SUCCESS_ROLE_ID_OUT),  # 외국인 역할 ID 추가

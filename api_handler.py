@@ -4,6 +4,7 @@ import json
 
 # 환경변수를 안전하게 가져오기
 BASE_URL = os.getenv("MC_API_BASE")
+USER_AGENT = f"PEBot/{os.getenv('DEV_MINECRAFT_NAME', 'nothing')}"
 if not BASE_URL:
     print("❌ MC_API_BASE 환경변수가 설정되지 않았습니다.")
     BASE_URL = "https://api.planetearth.kr"  # 기본값
@@ -17,7 +18,7 @@ async def get_discord_info(discord_id):
         f"/discord?discord={discord_id}"
     ]
     
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(headers={"User-Agent": USER_AGENT}) as session:
         for endpoint in possible_endpoints:
             url = f"{BASE_URL}{endpoint}"
             print(f"🔍 시도 중: {url}")
@@ -60,7 +61,7 @@ async def get_resident_info(uuid):
         f"/resident?uuid={uuid}"
     ]
     
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(headers={"User-Agent": USER_AGENT}) as session:
         for endpoint in possible_endpoints:
             url = f"{BASE_URL}{endpoint}"
             print(f"🔍 시도 중: {url}")

@@ -23,7 +23,7 @@ class PEApiUtils:
     async def _get_session(self) -> aiohttp.ClientSession:
         """aiohttp 세션 가져오기 (재사용)"""
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            self._session = aiohttp.ClientSession(headers={"User-Agent": config.USER_AGENT})
         return self._session
 
     async def close(self):

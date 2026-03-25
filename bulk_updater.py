@@ -3,6 +3,7 @@
 import requests
 import asyncio
 import discord
+from config import config
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 import threading
@@ -73,6 +74,7 @@ class BulkDataManager:
                 "https://api.planetearth.kr/resident/bulk",
                 params={"_t": int(_time.time())},  # 캐시 버스팅
                 headers={
+                    "User-Agent": config.USER_AGENT,
                     "Cache-Control": "no-cache, no-store",
                     "Pragma": "no-cache",
                 },
@@ -378,6 +380,7 @@ class BulkDataManager:
             print("🔄 Nation Bulk API 데이터 가져오는 중...")
             response = requests.get(
                 "https://api.planetearth.kr/nation/bulk",
+                headers={"User-Agent": config.USER_AGENT},
                 timeout=30
             )
             response.raise_for_status()
@@ -463,6 +466,7 @@ class BulkDataManager:
             print("🔄 Town Bulk API 데이터 가져오는 중...")
             response = requests.get(
                 "https://api.planetearth.kr/town/bulk",
+                headers={"User-Agent": config.USER_AGENT},
                 timeout=30
             )
             response.raise_for_status()
