@@ -495,7 +495,7 @@ async def on_ready():
         try:
             from commands.user.travel.travel_request import (
                 TravelReviewView, TravelAdminControlView, TravelUserControlView,
-                TravelPanelView
+                TravelPanelView, TravelOverstayView
             )
             from travel_manager import travel_manager, travel_config_manager
 
@@ -515,13 +515,21 @@ async def on_ready():
                 is_foreigner = travel.get("destination_nation", "").lower() == _base_nation.lower()
                 bot.add_view(TravelUserControlView(travel["id"], travel["discord_id"], show_invite=is_foreigner))
 
+            # 최근 완료된 여행의 미복귀 View 복원 (최근 50개)
+            completed_travels = travel_manager.get_all_travels(limit=50)
+            overstay_count = 0
+            for travel in completed_travels:
+                if travel["status"] == "completed":
+                    bot.add_view(TravelOverstayView(travel["id"], travel["discord_id"]))
+                    overstay_count += 1
+
             # 여행 신청 패널 View 복원
             panel_info = travel_config_manager.get_panel_info()
             if panel_info:
                 bot.add_view(TravelPanelView())
                 logger.info(f"여행 신청 패널 View 복원: channel={panel_info['channel_id']}")
 
-            logger.info(f"여행 영구 View 등록: 대기 {len(pending_travels)}개, 활성 {len(active_travels)}개")
+            logger.info(f"여행 영구 View 등록: 대기 {len(pending_travels)}개, 활성 {len(active_travels)}개, 미복귀 View {overstay_count}개")
         except Exception as view_error:
             logger.warning(f"여행 View 등록 실패: {view_error}")
 
@@ -546,6 +554,23 @@ async def on_ready():
             logger.info(f"경고 영구 View 등록: {len(warning_views)}개")
     except Exception as warning_view_error:
         logger.warning(f"경고 View 등록 실패: {warning_view_error}")
+
+    # ===== 6.6단계: 역할신청 패널 영구 View 등록 =====
+    try:
+        from commands.admin.role_panel.role_panel import RolePanelApplyView
+        from database_manager import db_manager as _rp_db
+
+        panels = _rp_db.get_active_role_panels(config.GUILD_ID)
+        registered = 0
+        for p in panels:
+            if p.get('message_id'):
+                bot.add_view(RolePanelApplyView(p['panel_id'], p['role_id']))
+                registered += 1
+
+        if registered:
+            logger.info(f"역할신청 패널 영구 View 등록: {registered}개")
+    except Exception as e:
+        logger.warning(f"역할신청 패널 View 등록 실패: {e}")
 
     # ===== 6.8단계: 복귀 스케줄러 시작 =====
     try:
@@ -598,7 +623,34 @@ async def on_ready():
 
     logger.info("봇이 완전히 준비되었습니다!")
 
-    # ===== 7단계: 터미널 명령어 입력 핸들러 시작 =====
+    # ===== 7단계: 시작 알림 전송 =====
+    try:
+        import subprocess
+        from datetime import timezone
+
+        try:
+            git_hash = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                stderr=subprocess.DEVNULL
+            ).decode().strip()
+        except Exception:
+            git_hash = "unknown"
+
+        log_channel = bot.get_channel(config.LOG_CHANNEL_ID)
+        if log_channel:
+            embed = discord.Embed(
+                title="🟢 봇 시작됨",
+                color=0x57F287,
+                timestamp=discord.utils.utcnow()
+            )
+            embed.add_field(name="버전", value=f"`{git_hash}`", inline=True)
+            embed.add_field(name="User-Agent", value=f"`{config.USER_AGENT}`", inline=True)
+            embed.add_field(name="서버", value=f"`{config.BASE_NATION}`", inline=True)
+            await log_channel.send(embed=embed)
+    except Exception as e:
+        logger.warning(f"시작 알림 전송 실패: {e}")
+
+    # ===== 8단계: 터미널 명령어 입력 핸들러 시작 =====
     asyncio.create_task(terminal_input_handler())
 
 @bot.event
