@@ -57,7 +57,7 @@ class DatabasePaginationView(discord.ui.View):
         page_users = self.all_users[start_idx:end_idx]
 
         embed = discord.Embed(
-            title="👥 전체 사용자 목록",
+            title="👥 전체 유저 목록",
             description=f"총 {len(self.all_users)}명 중 {start_idx + 1}-{min(end_idx, len(self.all_users))}번째",
             color=0x3498db
         )
@@ -73,10 +73,13 @@ class DatabasePaginationView(discord.ui.View):
             elif isinstance(last_updated, str):
                 last_updated = last_updated[:10]
 
+            nation = user.get('current_nation') or '없음'
+            town = user.get('current_town') or '없음'
+
             embed.add_field(
                 name=f"{i}. {member_name}",
-                value=f"**MC:** `{user['current_minecraft_name']}`\n"
-                      f"**UUID:** `{user['minecraft_uuid']}`\n"
+                value=f"**MC닉네임:** `{user['current_minecraft_name']}`\n"
+                      f"**국가:** {nation} / **마을:** {town}\n"
                       f"**업데이트:** {last_updated}",
                 inline=True
             )
@@ -119,13 +122,13 @@ def setup(bot):
     @bot.tree.command(name="데이터베이스", description="데이터베이스 조회 및 관리 (관리자 전용)")
     @app_commands.describe(
         기능="실행할 기능 선택",
-        유저="조회할 사용자 (선택)",
-        닉네임="검색할 Minecraft 닉네임 (선택)"
+        유저="조회할 Discord유저 (선택)",
+        닉네임="검색할 MC닉네임 (선택)"
     )
     @app_commands.check(is_admin)
     async def 데이터베이스(
         interaction: discord.Interaction,
-        기능: Literal["사용자_조회", "닉네임_검색", "통계", "전체_사용자"],
+        기능: Literal["유저_조회", "MC닉네임_검색", "통계", "전체_유저"],
         유저: discord.Member = None,
         닉네임: str = None
     ):
@@ -143,9 +146,9 @@ def setup(bot):
         if bot_logger:
             bot_logger.log_command("데이터베이스", interaction.user.id, interaction.user.name, source="admin_command", category=LogCategory.ADMIN, details={"기능": 기능})
 
-        if 기능 == "사용자_조회":
+        if 기능 == "유저_조회":
             if not 유저:
-                await interaction.response.send_message("조회할 사용자를 지정해주세요.", ephemeral=True)
+                await interaction.response.send_message("조회할 Discord유저를 지정해주세요.", ephemeral=True)
                 return
 
             await interaction.response.defer()
@@ -155,7 +158,7 @@ def setup(bot):
 
             if not user_info:
                 embed = discord.Embed(
-                    title="❌ 사용자 정보 없음",
+                    title="❌ 유저 정보 없음",
                     description=f"{유저.mention}의 정보가 데이터베이스에 없습니다.",
                     color=0xff0000
                 )
@@ -163,14 +166,14 @@ def setup(bot):
                 return
 
             embed = discord.Embed(
-                title=f"💾 사용자 데이터베이스 정보",
-                description=f"**사용자:** {유저.mention}",
+                title=f"💾 유저 데이터베이스 정보",
+                description=f"**Discord유저:** {유저.mention}",
                 color=0x00bfff
             )
 
             embed.add_field(
                 name="🎮 Minecraft 정보",
-                value=f"**현재 닉네임:** `{user_info['current_minecraft_name']}`\n"
+                value=f"**현재 MC닉네임:** `{user_info['current_minecraft_name']}`\n"
                       f"**UUID:** `{user_info['minecraft_uuid']}`",
                 inline=False
             )
@@ -227,8 +230,14 @@ def setup(bot):
                 )
 
             if name_history:
+                # 중복 제거: 같은 닉네임이 연속되면 최초 1회만 표시
+                unique_names = []
+                for h in name_history:
+                    mc_name = h['minecraft_name']
+                    if not unique_names or unique_names[-1]['minecraft_name'] != mc_name:
+                        unique_names.append(h)
                 history_lines = []
-                for i, h in enumerate(name_history[:5]):
+                for i, h in enumerate(unique_names[:5]):
                     changed_at = h['changed_at']
                     if hasattr(changed_at, 'strftime'):
                         changed_at = changed_at.strftime('%Y-%m-%d %H:%M:%S')
@@ -237,16 +246,42 @@ def setup(bot):
                     history_lines.append(f"{i+1}. `{h['minecraft_name']}` - {changed_at}")
                 history_text = "\n".join(history_lines)
                 embed.add_field(
-                    name=f"📝 닉네임 히스토리 (최근 5개)",
+                    name=f"📝 MC닉네임 히스토리 (최근 {len(history_lines)}개)",
                     value=history_text or "히스토리 없음",
+                    inline=False
+                )
+
+            # 국가/마을 히스토리 추가
+            nation_history = db_manager.get_nation_history(유저.id, limit=30)
+            if nation_history:
+                # 중복 제거: 같은 국가+마을이 연속되면 최초 1회만 표시
+                unique_nations = []
+                for h in nation_history:
+                    key = (h.get('nation_name') or '없음', h.get('town_name') or '없음')
+                    if not unique_nations or (unique_nations[-1].get('nation_name') or '없음', unique_nations[-1].get('town_name') or '없음') != key:
+                        unique_nations.append(h)
+                nation_lines = []
+                for i, h in enumerate(unique_nations[:5]):
+                    changed_at = h.get('changed_at', '')
+                    if hasattr(changed_at, 'strftime'):
+                        changed_at = changed_at.strftime('%Y-%m-%d %H:%M:%S')
+                    elif isinstance(changed_at, str):
+                        changed_at = changed_at[:19]
+                    nation_name = h.get('nation_name') or '없음'
+                    town_name = h.get('town_name') or '없음'
+                    nation_lines.append(f"{i+1}. **{nation_name}** / `{town_name}` - {changed_at}")
+                nation_text = "\n".join(nation_lines)
+                embed.add_field(
+                    name=f"🏰 국가/마을 히스토리 (최근 {len(nation_lines)}개)",
+                    value=nation_text,
                     inline=False
                 )
 
             await interaction.followup.send(embed=embed)
 
-        elif 기능 == "닉네임_검색":
+        elif 기능 == "MC닉네임_검색":
             if not 닉네임:
-                await interaction.response.send_message("검색할 Minecraft 닉네임을 입력해주세요.", ephemeral=True)
+                await interaction.response.send_message("검색할 MC닉네임을 입력해주세요.", ephemeral=True)
                 return
 
             await interaction.response.defer()
@@ -256,27 +291,27 @@ def setup(bot):
             if not results:
                 embed = discord.Embed(
                     title="🔍 검색 결과 없음",
-                    description=f"`{닉네임}`와(과) 일치하는 사용자를 찾을 수 없습니다.",
+                    description=f"`{닉네임}`와(과) 일치하는 유저를 찾을 수 없습니다.",
                     color=0xff6600
                 )
                 await interaction.followup.send(embed=embed, ephemeral=True)
                 return
 
-            # 검색 결과가 1명인 경우 - 사용자_조회처럼 자세한 정보 표시
+            # 검색 결과가 1명인 경우 - 유저_조회처럼 자세한 정보 표시
             if len(results) == 1:
                 user = results[0]
                 member = interaction.guild.get_member(int(user['discord_id']))
                 name_history = db_manager.get_name_history(int(user['discord_id']), limit=10)
 
                 embed = discord.Embed(
-                    title=f"💾 사용자 데이터베이스 정보",
-                    description=f"**사용자:** {member.mention if member else 'Unknown (' + str(user['discord_id']) + ')'}",
+                    title=f"💾 유저 데이터베이스 정보",
+                    description=f"**Discord유저:** {member.mention if member else 'Unknown (' + str(user['discord_id']) + ')'}",
                     color=0x00bfff
                 )
 
                 embed.add_field(
                     name="🎮 Minecraft 정보",
-                    value=f"**현재 닉네임:** `{user['current_minecraft_name']}`\n"
+                    value=f"**현재 MC닉네임:** `{user['current_minecraft_name']}`\n"
                           f"**UUID:** `{user['minecraft_uuid']}`",
                     inline=False
                 )
@@ -340,8 +375,14 @@ def setup(bot):
                     )
 
                 if name_history:
+                    # 중복 제거: 같은 닉네임이 연속되면 최초 1회만 표시
+                    unique_names = []
+                    for h in name_history:
+                        mc_name = h['minecraft_name']
+                        if not unique_names or unique_names[-1]['minecraft_name'] != mc_name:
+                            unique_names.append(h)
                     history_lines = []
-                    for i, h in enumerate(name_history[:5]):
+                    for i, h in enumerate(unique_names[:5]):
                         changed_at = h['changed_at']
                         if hasattr(changed_at, 'strftime'):
                             changed_at = changed_at.strftime('%Y-%m-%d %H:%M:%S')
@@ -350,8 +391,34 @@ def setup(bot):
                         history_lines.append(f"{i+1}. `{h['minecraft_name']}` - {changed_at}")
                     history_text = "\n".join(history_lines)
                     embed.add_field(
-                        name=f"📝 닉네임 히스토리 (최근 5개)",
+                        name=f"📝 MC닉네임 히스토리 (최근 {len(history_lines)}개)",
                         value=history_text or "히스토리 없음",
+                        inline=False
+                    )
+
+                # 국가/마을 히스토리 추가
+                nation_history = db_manager.get_nation_history(int(user['discord_id']), limit=30)
+                if nation_history:
+                    # 중복 제거: 같은 국가+마을이 연속되면 최초 1회만 표시
+                    unique_nations = []
+                    for h in nation_history:
+                        key = (h.get('nation_name') or '없음', h.get('town_name') or '없음')
+                        if not unique_nations or (unique_nations[-1].get('nation_name') or '없음', unique_nations[-1].get('town_name') or '없음') != key:
+                            unique_nations.append(h)
+                    nation_lines = []
+                    for i, h in enumerate(unique_nations[:5]):
+                        changed_at = h.get('changed_at', '')
+                        if hasattr(changed_at, 'strftime'):
+                            changed_at = changed_at.strftime('%Y-%m-%d %H:%M:%S')
+                        elif isinstance(changed_at, str):
+                            changed_at = changed_at[:19]
+                        nation_name = h.get('nation_name') or '없음'
+                        town_name = h.get('town_name') or '없음'
+                        nation_lines.append(f"{i+1}. **{nation_name}** / `{town_name}` - {changed_at}")
+                    nation_text = "\n".join(nation_lines)
+                    embed.add_field(
+                        name=f"🏰 국가/마을 히스토리 (최근 {len(nation_lines)}개)",
+                        value=nation_text,
                         inline=False
                     )
 
@@ -361,7 +428,7 @@ def setup(bot):
             # 검색 결과가 여러 명인 경우 - 목록 형태로 표시
             else:
                 embed = discord.Embed(
-                    title=f"🔍 닉네임 검색 결과",
+                    title=f"🔍 MC닉네임 검색 결과",
                     description=f"**검색어:** `{닉네임}`\n**발견:** {len(results)}명",
                     color=0x00ff00,
                     timestamp=datetime.datetime.now()
@@ -372,12 +439,12 @@ def setup(bot):
                     member_name = member.mention if member else f"Unknown User"
                     discord_id = user['discord_id']
 
-                    # 닉네임 히스토리 개수 확인
+                    # MC닉네임 히스토리 개수 확인
                     name_history = db_manager.get_name_history(int(discord_id), limit=1)
                     history_count = len(db_manager.get_name_history(int(discord_id), limit=100))
 
-                    value_text = f"**Discord:** {member_name} (`{discord_id}`)\n"
-                    value_text += f"**현재 닉네임:** `{user['current_minecraft_name']}`\n"
+                    value_text = f"**Discord유저:** {member_name} (`{discord_id}`)\n"
+                    value_text += f"**현재 MC닉네임:** `{user['current_minecraft_name']}`\n"
                     value_text += f"**UUID:** `{user['minecraft_uuid']}`\n"
 
                     if user.get('last_updated'):
@@ -389,10 +456,10 @@ def setup(bot):
                         value_text += f"**최근 업데이트:** {last_upd}\n"
 
                     if history_count > 1:
-                        value_text += f"**닉네임 변경:** {history_count}회"
+                        value_text += f"**MC닉네임 변경:** {history_count}회"
 
                     embed.add_field(
-                        name=f"{i}. 사용자 정보",
+                        name=f"{i}. 유저 정보",
                         value=value_text,
                         inline=False
                     )
@@ -411,14 +478,14 @@ def setup(bot):
 
             embed = discord.Embed(
                 title="📊 데이터베이스 통계",
-                description="Minecraft 사용자 데이터 통계",
+                description="Minecraft 유저 데이터 통계",
                 color=0x9b59b6
             )
 
             embed.add_field(
                 name="📈 전체 통계",
-                value=f"**총 사용자:** {stats['total_users']}명\n"
-                      f"**총 닉네임 변경:** {stats['total_name_changes']}회\n"
+                value=f"**총 유저:** {stats['total_users']}명\n"
+                      f"**총 MC닉네임 변경:** {stats['total_name_changes']}회\n"
                       f"**최근 24시간 업데이트:** {stats['recent_updates']}명",
                 inline=False
             )
@@ -431,7 +498,7 @@ def setup(bot):
                     top_text.append(f"{i}. {member_name} - {changer['change_count']}회")
 
                 embed.add_field(
-                    name="🏆 닉네임 변경 Top 5",
+                    name="🏆 MC닉네임 변경 Top 5",
                     value="\n".join(top_text) or "데이터 없음",
                     inline=False
                 )
@@ -439,7 +506,7 @@ def setup(bot):
             embed.timestamp = datetime.datetime.now()
             await interaction.followup.send(embed=embed)
 
-        elif 기능 == "전체_사용자":
+        elif 기능 == "전체_유저":
             await interaction.response.defer()
 
             # 모든 사용자 조회 (limit 없이)
@@ -448,7 +515,7 @@ def setup(bot):
             if not all_users:
                 embed = discord.Embed(
                     title="❌ 데이터 없음",
-                    description="데이터베이스에 사용자 정보가 없습니다.",
+                    description="데이터베이스에 유저 정보가 없습니다.",
                     color=0xff0000
                 )
                 await interaction.followup.send(embed=embed)

@@ -483,19 +483,15 @@ def setup(bot):
         기능="실행할 기능 선택",
         유저="대상 사용자",
         사유="제거 사유",
-        경고id="특정 경고 ID (경고제거 시)",
-        채널="로그 채널 (채널 설정 시)",
-        텍스트="설정 값 (처벌설정 시)"
+        경고id="특정 경고 ID (경고제거 시)"
     )
     @app_commands.check(is_admin)
     async def 경고관리(
         interaction: discord.Interaction,
-        기능: Literal["경고제거", "경고초기화", "경고조회", "경고목록", "채널", "처벌설정", "설정조회"],
+        기능: Literal["경고제거", "경고초기화", "경고조회", "경고목록"],
         유저: discord.Member = None,
         사유: str = None,
-        경고id: int = None,
-        채널: discord.TextChannel = None,
-        텍스트: str = None
+        경고id: int = None
     ):
         """경고 시스템 관리 - 관리자 전용"""
         from database_manager import db_manager
@@ -701,132 +697,6 @@ def setup(bot):
 
                 if len(warned_users) > 15:
                     embed.set_footer(text=f"... 외 {len(warned_users) - 15}명")
-
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        # ===== 채널 설정 =====
-        elif 기능 == "채널":
-            target_channel = 채널 or interaction.channel
-
-            success = db_manager.set_warning_log_channel(guild_id, target_channel.id)
-
-            embed = discord.Embed(
-                title="✅ 경고 로그 채널 설정" if success else "❌ 설정 실패",
-                description=f"**채널:** {target_channel.mention}\n\n경고 추가/제거 시 이 채널에 로그가 전송됩니다.",
-                color=0x00ff00 if success else 0xff0000,
-                timestamp=datetime.datetime.now()
-            )
-            embed.set_footer(text=f"처리자: {interaction.user.name}")
-
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        # ===== 처벌 설정 =====
-        elif 기능 == "처벌설정":
-            if not 텍스트:
-                await interaction.response.send_message(
-                    "처벌 설정 형식을 입력해주세요.\n\n"
-                    "**형식:** `경고횟수:처벌, 경고횟수:처벌, ...`\n"
-                    "**예시:** `3:mute_1h, 5:kick, 7:ban`\n\n"
-                    "**사용 가능한 처벌:**\n"
-                    "- `mute_Xh` : X시간 타임아웃 (예: mute_1h, mute_24h)\n"
-                    "- `mute_Xm` : X분 타임아웃 (예: mute_30m)\n"
-                    "- `kick` : 서버 추방\n"
-                    "- `ban` : 서버 차단\n\n"
-                    "**초기화:** `없음` 또는 `reset` 입력",
-                    ephemeral=True
-                )
-                return
-
-            punishments = {}
-            if 텍스트.lower() in ('없음', 'reset', 'none', '초기화'):
-                punishments = {}
-            else:
-                try:
-                    punishments = json.loads(텍스트)
-                except json.JSONDecodeError:
-                    for item in 텍스트.split(','):
-                        item = item.strip()
-                        if ':' in item:
-                            count_str, action = item.split(':', 1)
-                            count_str = count_str.strip()
-                            action = action.strip().lower()
-                            if count_str.isdigit() and is_valid_punishment(action):
-                                punishments[count_str] = action
-                            else:
-                                await interaction.response.send_message(
-                                    f"❌ 잘못된 형식: `{item}`\n"
-                                    f"사용 가능: `mute_Xh`, `mute_Xm`, `kick`, `ban`",
-                                    ephemeral=True
-                                )
-                                return
-                        else:
-                            await interaction.response.send_message(
-                                f"❌ 잘못된 형식: `{item}`\n형식: `경고횟수:처벌`",
-                                ephemeral=True
-                            )
-                            return
-
-            punishments_json = json.dumps(punishments, ensure_ascii=False)
-            success = db_manager.set_warning_punishments(guild_id, punishments_json)
-
-            if punishments:
-                display_lines = []
-                for count, action in sorted(punishments.items(), key=lambda x: int(x[0])):
-                    display_lines.append(f"**{count}회** -> `{action}`")
-                display_text = "\n".join(display_lines)
-            else:
-                display_text = "자동 처벌 없음"
-
-            embed = discord.Embed(
-                title="✅ 처벌 설정 완료" if success else "❌ 설정 실패",
-                description=f"**자동 처벌 규칙:**\n{display_text}",
-                color=0x00ff00 if success else 0xff0000,
-                timestamp=datetime.datetime.now()
-            )
-            embed.set_footer(text=f"처리자: {interaction.user.name}")
-
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        # ===== 설정 조회 =====
-        elif 기능 == "설정조회":
-            config_data = db_manager.get_warning_config(guild_id)
-
-            embed = discord.Embed(
-                title="⚙️ 경고 시스템 설정",
-                color=0x3498db
-            )
-
-            # 로그 채널
-            log_ch_id = config_data.get('log_channel_id')
-            if log_ch_id:
-                channel = interaction.guild.get_channel(log_ch_id)
-                ch_text = channel.mention if channel else f"❌ 알 수 없는 채널 ({log_ch_id})"
-            else:
-                ch_text = "❌ 설정되지 않음"
-            embed.add_field(name="📢 로그 채널", value=ch_text, inline=False)
-
-            # 처벌 규칙
-            punishments_str = config_data.get('punishments', '{}')
-            try:
-                punishments = json.loads(punishments_str) if isinstance(punishments_str, str) else punishments_str
-            except:
-                punishments = {}
-
-            if punishments:
-                punishment_lines = []
-                for count, action in sorted(punishments.items(), key=lambda x: int(x[0])):
-                    punishment_lines.append(f"**{count}회** -> `{action}`")
-                embed.add_field(name="🔨 자동 처벌 규칙", value="\n".join(punishment_lines), inline=False)
-            else:
-                embed.add_field(name="🔨 자동 처벌 규칙", value="설정되지 않음", inline=False)
-
-            # 마지막 변경
-            updated = config_data.get('updated_at')
-            if updated:
-                if isinstance(updated, datetime.datetime):
-                    embed.set_footer(text=f"마지막 설정 변경: {updated.strftime('%Y-%m-%d %H:%M')}")
-                else:
-                    embed.set_footer(text=f"마지막 설정 변경: {str(updated)[:16]}")
 
             await interaction.response.send_message(embed=embed, ephemeral=True)
 

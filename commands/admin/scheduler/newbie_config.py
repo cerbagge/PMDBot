@@ -26,7 +26,7 @@ def setup(bot):
     @bot.tree.command(name="뉴비설정", description="뉴비 알림 채널 및 역할을 설정합니다")
     @app_commands.describe(
         기능="설정할 기능을 선택하세요",
-        채널="알림을 받을 채널 (채널설정 시 필수)",
+        채널="알림을 받을 채널 (미지정 시 현재 채널)",
         역할="역할 (뉴비역할/핑역할설정/핑역할제거 시 필수)"
     )
     @app_commands.choices(기능=[
@@ -55,10 +55,8 @@ def setup(bot):
             from newbie_config_manager import newbie_config_manager
 
             if 기능.value == "채널설정":
-                # 채널 설정
-                if not 채널:
-                    await interaction.followup.send("❌ 채널을 지정해주세요.", ephemeral=True)
-                    return
+                # 채널 설정 (미지정 시 현재 채널)
+                채널 = 채널 or interaction.channel
 
                 success = newbie_config_manager.set_notification_channel(채널.id)
 

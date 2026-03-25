@@ -468,6 +468,53 @@ class DatabaseManager:
             ON user_changes(processed)
         '''))
 
+        # 역할 신청 패널 테이블
+        cursor.execute(self.adapter.adapt_ddl('''
+            CREATE TABLE IF NOT EXISTS role_panels (
+                id SERIAL PRIMARY KEY,
+                panel_id TEXT UNIQUE NOT NULL,
+                guild_id BIGINT NOT NULL,
+                role_id BIGINT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                channel_id BIGINT,
+                message_id BIGINT,
+                review_channel_id BIGINT,
+                created_by BIGINT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        '''))
+
+        self.adapter.add_column_safe(cursor, 'role_panels', 'review_channel_id', 'BIGINT')
+
+        cursor.execute(self.adapter.adapt_ddl('''
+            CREATE INDEX IF NOT EXISTS idx_role_panels_guild
+            ON role_panels(guild_id)
+        '''))
+
+        # 역할 신청 유저 추적 테이블
+        cursor.execute(self.adapter.adapt_ddl('''
+            CREATE TABLE IF NOT EXISTS role_panel_users (
+                id SERIAL PRIMARY KEY,
+                panel_id TEXT NOT NULL,
+                discord_id BIGINT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                applied_at TIMESTAMP DEFAULT NOW(),
+                reviewed_by BIGINT,
+                reviewed_at TIMESTAMP,
+                UNIQUE(panel_id, discord_id)
+            )
+        '''))
+
+        self.adapter.add_column_safe(cursor, 'role_panel_users', 'status', "TEXT DEFAULT 'pending'")
+        self.adapter.add_column_safe(cursor, 'role_panel_users', 'reviewed_by', 'BIGINT')
+        self.adapter.add_column_safe(cursor, 'role_panel_users', 'reviewed_at', 'TIMESTAMP')
+
+        cursor.execute(self.adapter.adapt_ddl('''
+            CREATE INDEX IF NOT EXISTS idx_role_panel_users_panel
+            ON role_panel_users(panel_id)
+        '''))
+
         conn.commit()
         conn.close()
 
@@ -1971,6 +2018,28 @@ class DatabaseManager:
             saved_count = 0
             history_count = 0
             error_count = 0
+            deleted_count = 0
+
+            # API 응답에 있는 국가 UUID 목록
+            api_uuids = set()
+            for n in nations:
+                if n.get('uuid'):
+                    api_uuids.add(n['uuid'])
+
+            # DB에 있지만 API에 없는 국가 삭제 (멸망/삭제된 국가)
+            if api_uuids:
+                dict_cursor.execute(self.adapter.adapt_sql(
+                    'SELECT uuid, name FROM all_nations'
+                ))
+                db_nations = dict_cursor.fetchall()
+                for db_nation in db_nations:
+                    db_row = dict(db_nation)
+                    if db_row['uuid'] not in api_uuids:
+                        cursor.execute(self.adapter.adapt_sql(
+                            'DELETE FROM all_nations WHERE uuid = %s'
+                        ), (db_row['uuid'],))
+                        deleted_count += 1
+                        print(f"[DELETE] 국가 삭제됨 (API에서 사라짐): {db_row.get('name')} ({db_row['uuid'][:8]}...)")
 
             for nation in nations:
               try:
@@ -2094,6 +2163,8 @@ class DatabaseManager:
             conn.commit()
             conn.close()
 
+            if deleted_count > 0:
+                print(f"[DELETE] 총 {deleted_count}개 국가 삭제됨 (API에서 사라짐)")
             if history_count > 0:
                 print(f"[HISTORY] 국가 변경 히스토리 {history_count}건 기록됨")
             if error_count > 0:
@@ -3353,6 +3424,238 @@ class DatabaseManager:
         except Exception as e:
             print(f"[ERROR] 자동 처벌 규칙 설정 실패: {e}")
             return False
+
+    # ===== 역할 신청 패널 메서드 =====
+
+    def create_role_panel(self, guild_id: int, role_id: int, title: str, description: str, created_by: int) -> Optional[str]:
+        """역할 신청 패널 생성, panel_id 반환"""
+        try:
+            conn = self.get_connection()
+            cursor = self._dict_cursor(conn)
+
+            cursor.execute(self.adapter.adapt_sql('SELECT MAX(id) as max_id FROM role_panels'))
+            row = cursor.fetchone()
+            next_num = ((row['max_id'] if isinstance(row, dict) else row[0]) or 0) + 1
+            panel_id = f"RP{next_num:04d}"
+
+            cursor.execute(self.adapter.adapt_sql('''
+                INSERT INTO role_panels (panel_id, guild_id, role_id, title, description, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            '''), (panel_id, guild_id, role_id, title, description, created_by))
+
+            conn.commit()
+            conn.close()
+            print(f"[OK] 역할 패널 생성: {panel_id}")
+            return panel_id
+
+        except Exception as e:
+            print(f"[ERROR] 역할 패널 생성 실패: {e}")
+            return None
+
+    def get_role_panel(self, panel_id: str) -> Optional[Dict]:
+        """패널 ID로 패널 정보 조회"""
+        try:
+            conn = self.get_connection()
+            cursor = self._dict_cursor(conn)
+
+            cursor.execute(self.adapter.adapt_sql(
+                'SELECT * FROM role_panels WHERE panel_id = %s'
+            ), (panel_id,))
+            row = cursor.fetchone()
+            conn.close()
+            return dict(row) if row else None
+
+        except Exception as e:
+            print(f"[ERROR] 역할 패널 조회 실패: {e}")
+            return None
+
+    def update_role_panel_message(self, panel_id: str, channel_id: int, message_id: int) -> bool:
+        """패널의 채널/메시지 ID 업데이트"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(self.adapter.adapt_sql('''
+                UPDATE role_panels SET channel_id = %s, message_id = %s WHERE panel_id = %s
+            '''), (channel_id, message_id, panel_id))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            print(f"[ERROR] 역할 패널 메시지 업데이트 실패: {e}")
+            return False
+
+    def set_role_panel_review_channel(self, panel_id: str, channel_id: int) -> bool:
+        """패널의 리뷰 채널 설정"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(self.adapter.adapt_sql('''
+                UPDATE role_panels SET review_channel_id = %s WHERE panel_id = %s
+            '''), (channel_id, panel_id))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            print(f"[ERROR] 리뷰 채널 설정 실패: {e}")
+            return False
+
+    def add_role_panel_user(self, panel_id: str, discord_id: int) -> bool:
+        """패널에 유저 신청 추가 (기각된 유저는 재신청 가능)"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(self.adapter.adapt_sql('''
+                INSERT INTO role_panel_users (panel_id, discord_id, status, applied_at)
+                VALUES (%s, %s, 'pending', NOW())
+                ON CONFLICT (panel_id, discord_id) DO UPDATE SET
+                    status = 'pending',
+                    applied_at = NOW(),
+                    reviewed_by = NULL,
+                    reviewed_at = NULL
+            '''), (panel_id, discord_id))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            print(f"[ERROR] 역할 패널 유저 추가 실패: {e}")
+            return False
+
+    def update_role_panel_user_status(self, panel_id: str, discord_id: int, status: str, reviewed_by: int) -> bool:
+        """유저 신청 상태 업데이트 (approved/denied)"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(self.adapter.adapt_sql('''
+                UPDATE role_panel_users
+                SET status = %s, reviewed_by = %s, reviewed_at = NOW()
+                WHERE panel_id = %s AND discord_id = %s
+            '''), (status, reviewed_by, panel_id, discord_id))
+
+            conn.commit()
+            conn.close()
+            return True
+
+        except Exception as e:
+            print(f"[ERROR] 유저 상태 업데이트 실패: {e}")
+            return False
+
+    def check_role_panel_user(self, panel_id: str, discord_id: int) -> Optional[Dict]:
+        """유저 신청 상태 조회 (없으면 None)"""
+        try:
+            conn = self.get_connection()
+            cursor = self._dict_cursor(conn)
+
+            cursor.execute(self.adapter.adapt_sql('''
+                SELECT status, applied_at FROM role_panel_users
+                WHERE panel_id = %s AND discord_id = %s
+            '''), (panel_id, discord_id))
+
+            row = cursor.fetchone()
+            conn.close()
+            return dict(row) if row else None
+
+        except Exception as e:
+            print(f"[ERROR] 역할 패널 유저 확인 실패: {e}")
+            return None
+
+    def get_role_panel_users(self, panel_id: str, status: str = None) -> List[Dict]:
+        """패널의 신청 유저 조회 (status 필터 가능)"""
+        try:
+            conn = self.get_connection()
+            cursor = self._dict_cursor(conn)
+
+            if status:
+                cursor.execute(self.adapter.adapt_sql('''
+                    SELECT discord_id, status, applied_at FROM role_panel_users
+                    WHERE panel_id = %s AND status = %s ORDER BY applied_at
+                '''), (panel_id, status))
+            else:
+                cursor.execute(self.adapter.adapt_sql('''
+                    SELECT discord_id, status, applied_at FROM role_panel_users
+                    WHERE panel_id = %s ORDER BY applied_at
+                '''), (panel_id,))
+
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
+
+        except Exception as e:
+            print(f"[ERROR] 역할 패널 유저 목록 조회 실패: {e}")
+            return []
+
+    def clear_role_panel_users(self, panel_id: str) -> int:
+        """패널의 모든 유저 삭제, 삭제된 수 반환"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(self.adapter.adapt_sql('''
+                DELETE FROM role_panel_users WHERE panel_id = %s
+            '''), (panel_id,))
+
+            count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            return count
+
+        except Exception as e:
+            print(f"[ERROR] 역할 패널 유저 일괄 삭제 실패: {e}")
+            return 0
+
+    def delete_role_panel(self, panel_id: str) -> bool:
+        """패널 및 관련 유저 데이터 삭제"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(self.adapter.adapt_sql(
+                'DELETE FROM role_panel_users WHERE panel_id = %s'
+            ), (panel_id,))
+            cursor.execute(self.adapter.adapt_sql(
+                'DELETE FROM role_panels WHERE panel_id = %s'
+            ), (panel_id,))
+
+            conn.commit()
+            conn.close()
+            print(f"[OK] 역할 패널 삭제: {panel_id}")
+            return True
+
+        except Exception as e:
+            print(f"[ERROR] 역할 패널 삭제 실패: {e}")
+            return False
+
+    def get_active_role_panels(self, guild_id: int = None) -> List[Dict]:
+        """활성 역할 패널 목록 조회 (View 복구용)"""
+        try:
+            conn = self.get_connection()
+            cursor = self._dict_cursor(conn)
+
+            if guild_id:
+                cursor.execute(self.adapter.adapt_sql(
+                    'SELECT * FROM role_panels WHERE guild_id = %s'
+                ), (guild_id,))
+            else:
+                cursor.execute(self.adapter.adapt_sql(
+                    'SELECT * FROM role_panels'
+                ))
+
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
+
+        except Exception as e:
+            print(f"[ERROR] 역할 패널 목록 조회 실패: {e}")
+            return []
 
 
 # 전역 데이터베이스 관리자 인스턴스

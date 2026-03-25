@@ -461,6 +461,24 @@ class TravelManager:
         print(f"[OK] 여행 완료: {travel_id}")
         return True
 
+    def extend_travel(self, travel_id: str, new_end_date: str) -> bool:
+        """여행 기간 연장 (종료된 여행도 다시 활성화)"""
+        travel = self.data["travels"].get(travel_id)
+        if not travel:
+            return False
+
+        travel["end_date"] = new_end_date
+        travel["status"] = TravelStatus.ACTIVE.value
+        travel["updated_at"] = datetime.now().isoformat()
+        # 알림 플래그 초기화
+        travel["notified_1day"] = False
+        travel["notified_end"] = False
+        travel["notified_overstay"] = False
+
+        self._save_data()
+        print(f"[OK] 여행 연장: {travel_id} → {new_end_date}")
+        return True
+
     def cancel_travel(self, travel_id: str) -> bool:
         """여행 취소"""
         travel = self.data["travels"].get(travel_id)

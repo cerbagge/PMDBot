@@ -894,6 +894,419 @@ class TravelAdminControlView(ui.View):
                 await log_channel.send(content=role_mentions if role_mentions else None, embed=embed)
 
 
+class TravelExtendModal(ui.Modal, title="여행 연장"):
+    """여행 연장 시 새 종료일 입력 모달"""
+
+    new_end_date = ui.TextInput(
+        label="새 종료일 (YYYY.MM.DD)",
+        placeholder="예: 2025.02.15",
+        required=True,
+        max_length=10
+    )
+
+    def __init__(self, travel_id: str, user_discord_id: int):
+        super().__init__()
+        self.travel_id = travel_id
+        self.user_discord_id = user_discord_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            from travel_manager import travel_manager, travel_config_manager
+            from database_manager import db_manager
+
+            # 권한 확인
+            if not travel_config_manager.is_manager(interaction.user):
+                await interaction.followup.send("❌ 여행 관리 권한이 없습니다.", ephemeral=True)
+                return
+
+            travel = travel_manager.get_travel(self.travel_id)
+            if not travel:
+                await interaction.followup.send("❌ 해당 여행을 찾을 수 없습니다.", ephemeral=True)
+                return
+
+            # 날짜 검증
+            date_pattern = r'^\d{4}\.\d{2}\.\d{2}$'
+            if not re.match(date_pattern, self.new_end_date.value):
+                await interaction.followup.send("❌ 날짜 형식이 올바르지 않습니다. `YYYY.MM.DD` 형식으로 입력해주세요.", ephemeral=True)
+                return
+
+            try:
+                new_end = datetime.strptime(self.new_end_date.value, "%Y.%m.%d").date()
+            except ValueError:
+                await interaction.followup.send("❌ 유효하지 않은 날짜입니다.", ephemeral=True)
+                return
+
+            if new_end <= date.today():
+                await interaction.followup.send("❌ 새 종료일은 오늘 이후여야 합니다.", ephemeral=True)
+                return
+
+            # 여행 연장 처리
+            success = travel_manager.extend_travel(self.travel_id, self.new_end_date.value)
+            if not success:
+                await interaction.followup.send("❌ 여행 연장에 실패했습니다.", ephemeral=True)
+                return
+
+            db_manager.set_user_traveling(self.user_discord_id, True)
+
+            # 임베드 업데이트
+            if interaction.message:
+                updated_embed = interaction.message.embeds[0] if interaction.message.embeds else None
+                if updated_embed:
+                    updated_embed.color = 0x00ff00
+                    updated_embed.title = "⏳ 여행 미복귀 - 연장 처리됨"
+                    updated_embed.add_field(
+                        name="연장 처리",
+                        value=f"관리자 {interaction.user.mention}에 의해 연장됨\n새 종료일: **{self.new_end_date.value}**",
+                        inline=False
+                    )
+                    # 연장 후에는 일반 관리 버튼으로 교체
+                    admin_view = TravelAdminControlView(self.travel_id, self.user_discord_id)
+                    await interaction.message.edit(embed=updated_embed, view=admin_view)
+
+            # 신청자에게 DM 전송
+            try:
+                from config import config
+                bot = interaction.client
+                guild = bot.get_guild(config.GUILD_ID) if config.GUILD_ID else (interaction.guild)
+                if guild:
+                    applicant = guild.get_member(self.user_discord_id)
+                    if applicant:
+                        dm_embed = discord.Embed(
+                            title="⏳ 여행이 연장되었습니다",
+                            description=f"관리자에 의해 여행 기간이 연장되었습니다.\n"
+                                       f"새 종료일: **{self.new_end_date.value}**\n"
+                                       f"연장된 기간 동안 역할/닉네임 변동이 적용되지 않습니다.",
+                            color=0x00ff00
+                        )
+                        dm_embed.add_field(name="신청 ID", value=f"`{self.travel_id}`", inline=True)
+                        dm_embed.add_field(name="목적지", value=travel.get('destination_nation', '?'), inline=True)
+                        dm_embed.add_field(name="새 종료일", value=self.new_end_date.value, inline=True)
+                        await applicant.send(embed=dm_embed)
+            except discord.Forbidden:
+                pass
+
+            # 로그 채널에 기록
+            log_channel_id = travel_config_manager.get_log_channel()
+            if log_channel_id:
+                guild = interaction.guild
+                if not guild:
+                    from config import config
+                    guild = interaction.client.get_guild(config.GUILD_ID)
+                if guild:
+                    log_channel = guild.get_channel(log_channel_id)
+                    if log_channel:
+                        log_embed = discord.Embed(
+                            title="📋 여행 연장 처리",
+                            color=0x00ff00
+                        )
+                        log_embed.add_field(name="신청 ID", value=f"`{self.travel_id}`", inline=True)
+                        log_embed.add_field(name="대상자", value=f"<@{self.user_discord_id}>", inline=True)
+                        log_embed.add_field(name="마크 닉네임", value=travel.get('minecraft_name', '?'), inline=True)
+                        log_embed.add_field(name="목적지", value=travel.get('destination_nation', '?'), inline=True)
+                        log_embed.add_field(name="새 종료일", value=self.new_end_date.value, inline=True)
+                        log_embed.add_field(name="처리자", value=interaction.user.mention, inline=True)
+                        log_embed.set_footer(text=f"처리 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                        await log_channel.send(embed=log_embed)
+
+            await interaction.followup.send(
+                f"✅ 여행이 **{self.new_end_date.value}**까지 연장되었습니다.",
+                ephemeral=True
+            )
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send(f"❌ 오류가 발생했습니다: {str(e)}", ephemeral=True)
+
+
+class TravelOverstayView(ui.View):
+    """여행 종료 후 미복귀 시 관리자용 연장/정착 버튼 뷰 (영구 View)"""
+
+    def __init__(self, travel_id: str, user_discord_id: int):
+        super().__init__(timeout=None)
+        self.travel_id = travel_id
+        self.user_discord_id = user_discord_id
+
+        # 여행 연장 버튼
+        extend_btn = ui.Button(
+            label="여행 연장",
+            style=discord.ButtonStyle.primary,
+            emoji="⏳",
+            custom_id=f"travel_overstay_extend_{travel_id}"
+        )
+        extend_btn.callback = self.extend_callback
+        self.add_item(extend_btn)
+
+        # 정착 처리 버튼
+        settle_btn = ui.Button(
+            label="정착 처리",
+            style=discord.ButtonStyle.success,
+            emoji="🏠",
+            custom_id=f"travel_overstay_settle_{travel_id}"
+        )
+        settle_btn.callback = self.settle_callback
+        self.add_item(settle_btn)
+
+        # 여행 종료 버튼
+        end_btn = ui.Button(
+            label="여행 종료",
+            style=discord.ButtonStyle.danger,
+            emoji="🏁",
+            custom_id=f"travel_overstay_end_{travel_id}"
+        )
+        end_btn.callback = self.end_callback
+        self.add_item(end_btn)
+
+    async def end_callback(self, interaction: discord.Interaction):
+        from travel_manager import travel_manager, travel_config_manager
+        from database_manager import db_manager
+
+        # 권한 확인
+        if not travel_config_manager.is_manager(interaction.user):
+            await interaction.response.send_message("❌ 여행 관리 권한이 없습니다.", ephemeral=True)
+            return
+
+        travel = travel_manager.get_travel(self.travel_id)
+        if not travel:
+            await interaction.response.send_message("❌ 해당 여행을 찾을 수 없습니다.", ephemeral=True)
+            return
+
+        if travel["status"] == "completed":
+            await interaction.response.send_message("❌ 이미 종료된 여행입니다.", ephemeral=True)
+            return
+
+        # 여행 종료 처리
+        travel_manager.complete_travel(self.travel_id)
+        db_manager.set_user_traveling(self.user_discord_id, False)
+
+        # 원래 국가 기반 역할 복원
+        role_restored = False
+        try:
+            from config import config
+            guild = interaction.guild
+            if not guild:
+                guild = interaction.client.get_guild(config.GUILD_ID)
+            if guild and travel.get('original_nation'):
+                applicant = guild.get_member(self.user_discord_id)
+                if applicant:
+                    from travel_scheduler import restore_travel_roles
+                    await restore_travel_roles(applicant, travel, guild)
+                    role_restored = True
+        except Exception as e:
+            print(f"[TRAVEL] 역할 복원 오류: {e}")
+
+        # 임베드 업데이트
+        if interaction.message:
+            updated_embed = interaction.message.embeds[0] if interaction.message.embeds else None
+            if updated_embed:
+                updated_embed.color = 0x808080
+                updated_embed.title = "✈️ 여행 신청 - 종료됨"
+                end_text = f"관리자 {interaction.user.mention}에 의해 종료됨"
+                if role_restored:
+                    end_text += f"\n🏷️ 원래 국가({travel.get('original_nation', '?')}) 기반 역할 복원됨"
+                updated_embed.add_field(name="종료 처리", value=end_text, inline=False)
+                await interaction.message.edit(embed=updated_embed, view=None)
+
+        # 신청자에게 DM 전송
+        try:
+            from config import config
+            guild = interaction.guild or interaction.client.get_guild(config.GUILD_ID)
+            if guild:
+                applicant = guild.get_member(self.user_discord_id)
+                if applicant:
+                    dm_embed = discord.Embed(
+                        title="🏁 여행이 종료되었습니다",
+                        description=f"관리자에 의해 여행이 종료되었습니다.\n이제부터 역할/닉네임 변동이 정상적으로 적용됩니다.",
+                        color=0x808080
+                    )
+                    dm_embed.add_field(name="신청 ID", value=f"`{self.travel_id}`", inline=True)
+                    dm_embed.add_field(name="처리자", value=interaction.user.display_name, inline=True)
+                    await applicant.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass
+
+        # 로그 채널에 종료 기록
+        log_channel_id = travel_config_manager.get_log_channel()
+        if log_channel_id:
+            guild = interaction.guild
+            if not guild:
+                from config import config
+                guild = interaction.client.get_guild(config.GUILD_ID)
+            if guild:
+                log_channel = guild.get_channel(log_channel_id)
+                if log_channel:
+                    log_embed = discord.Embed(
+                        title="📋 여행 종료 (미복귀 → 관리자 종료)",
+                        color=0x808080
+                    )
+                    log_embed.add_field(name="신청 ID", value=f"`{self.travel_id}`", inline=True)
+                    log_embed.add_field(name="대상자", value=f"<@{self.user_discord_id}>", inline=True)
+                    log_embed.add_field(name="마크 닉네임", value=travel.get('minecraft_name', '?'), inline=True)
+                    log_embed.add_field(name="목적지", value=travel.get('destination_nation', '?'), inline=True)
+                    log_embed.add_field(name="기간", value=f"{travel['start_date']} ~ {travel['end_date']}", inline=True)
+                    log_embed.add_field(name="처리자", value=interaction.user.mention, inline=True)
+                    if role_restored:
+                        log_embed.add_field(name="역할 복원", value=f"원래 국가: {travel.get('original_nation', '?')}", inline=False)
+                    log_embed.set_footer(text=f"처리 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    await log_channel.send(embed=log_embed)
+
+        await interaction.response.send_message("✅ 여행이 종료되었습니다.", ephemeral=True)
+
+    async def extend_callback(self, interaction: discord.Interaction):
+        from travel_manager import travel_config_manager
+
+        # 권한 확인
+        if not travel_config_manager.is_manager(interaction.user):
+            await interaction.response.send_message("❌ 여행 관리 권한이 없습니다.", ephemeral=True)
+            return
+
+        modal = TravelExtendModal(self.travel_id, self.user_discord_id)
+        await interaction.response.send_modal(modal)
+
+    async def settle_callback(self, interaction: discord.Interaction):
+        from travel_manager import travel_manager, travel_config_manager
+        from database_manager import db_manager
+
+        # 권한 확인
+        if not travel_config_manager.is_manager(interaction.user):
+            await interaction.response.send_message("❌ 여행 관리 권한이 없습니다.", ephemeral=True)
+            return
+
+        travel = travel_manager.get_travel(self.travel_id)
+        if not travel:
+            await interaction.response.send_message("❌ 해당 여행을 찾을 수 없습니다.", ephemeral=True)
+            return
+
+        # 정착 처리: 여행 완료 + 여행 상태 해제 + 역할을 목적지 국가 기준으로 설정
+        travel_manager.complete_travel(self.travel_id)
+        db_manager.set_user_traveling(self.user_discord_id, False)
+
+        try:
+            from config import config
+            guild = interaction.guild
+            if not guild:
+                guild = interaction.client.get_guild(config.GUILD_ID)
+
+            destination = travel.get('destination_nation', '')
+            role_change_msg = ""
+
+            if guild:
+                applicant = guild.get_member(self.user_discord_id)
+                if applicant:
+                    # 목적지 국가 기반으로 역할 설정 (정착이므로 목적지가 새 소속)
+                    success_role_id = config.SUCCESS_ROLE_ID
+                    success_role_out_id = config.SUCCESS_ROLE_ID_OUT
+                    base_nation = config.BASE_NATION
+                    base_nation_uuid = getattr(config, 'BASE_NATION_UUID', None)
+
+                    if success_role_id:
+                        # 목적지가 base nation인지 확인
+                        is_base = False
+                        if base_nation_uuid:
+                            try:
+                                from bulk_updater import bulk_data_manager
+                                nation_info = bulk_data_manager.get_nation_by_name(destination)
+                                if nation_info and nation_info.get('uuid') == base_nation_uuid:
+                                    is_base = True
+                                elif base_nation and destination.lower() == base_nation.lower():
+                                    is_base = True
+                            except Exception:
+                                if base_nation and destination.lower() == base_nation.lower():
+                                    is_base = True
+                        else:
+                            if base_nation and destination.lower() == base_nation.lower():
+                                is_base = True
+
+                        if is_base:
+                            # 정착지가 base nation → 조직원
+                            success_role = guild.get_role(success_role_id)
+                            if success_role and success_role not in applicant.roles:
+                                await applicant.add_roles(success_role)
+                            if success_role_out_id:
+                                out_role = guild.get_role(success_role_out_id)
+                                if out_role and out_role in applicant.roles:
+                                    await applicant.remove_roles(out_role)
+                            role_change_msg = "→ 국민(조직원) 역할 적용"
+                        else:
+                            # 정착지가 외국 → 외국인
+                            if success_role_out_id:
+                                out_role = guild.get_role(success_role_out_id)
+                                if out_role and out_role not in applicant.roles:
+                                    await applicant.add_roles(out_role)
+                            success_role = guild.get_role(success_role_id)
+                            if success_role and success_role in applicant.roles:
+                                await applicant.remove_roles(success_role)
+                            role_change_msg = "→ 외국인 역할 적용"
+
+            # 임베드 업데이트
+            if interaction.message:
+                updated_embed = interaction.message.embeds[0] if interaction.message.embeds else None
+                if updated_embed:
+                    updated_embed.color = 0x808080
+                    updated_embed.title = "⏳ 여행 미복귀 - 정착 처리됨"
+                    updated_embed.add_field(
+                        name="정착 처리",
+                        value=f"관리자 {interaction.user.mention}에 의해 정착 처리됨\n"
+                              f"정착 국가: **{destination}** {role_change_msg}",
+                        inline=False
+                    )
+                    await interaction.message.edit(embed=updated_embed, view=None)
+
+            # 신청자에게 DM 전송
+            try:
+                if guild:
+                    applicant = guild.get_member(self.user_discord_id)
+                    if applicant:
+                        dm_embed = discord.Embed(
+                            title="🏠 정착 처리되었습니다",
+                            description=f"**{destination}**에 정착 처리되었습니다.\n"
+                                       f"이제부터 역할/닉네임 변동이 정상적으로 적용됩니다.",
+                            color=0x808080
+                        )
+                        dm_embed.add_field(name="신청 ID", value=f"`{self.travel_id}`", inline=True)
+                        dm_embed.add_field(name="정착 국가", value=destination, inline=True)
+                        await applicant.send(embed=dm_embed)
+            except discord.Forbidden:
+                pass
+
+            # 로그 채널에 기록
+            log_channel_id = travel_config_manager.get_log_channel()
+            if log_channel_id and guild:
+                log_channel = guild.get_channel(log_channel_id)
+                if log_channel:
+                    log_embed = discord.Embed(
+                        title="📋 정착 처리",
+                        color=0x808080
+                    )
+                    log_embed.add_field(name="신청 ID", value=f"`{self.travel_id}`", inline=True)
+                    log_embed.add_field(name="대상자", value=f"<@{self.user_discord_id}>", inline=True)
+                    log_embed.add_field(name="마크 닉네임", value=travel.get('minecraft_name', '?'), inline=True)
+                    log_embed.add_field(name="정착 국가", value=destination, inline=True)
+                    log_embed.add_field(name="처리자", value=interaction.user.mention, inline=True)
+                    if role_change_msg:
+                        log_embed.add_field(name="역할 변경", value=role_change_msg, inline=True)
+                    log_embed.set_footer(text=f"처리 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                    await log_channel.send(embed=log_embed)
+
+            await interaction.response.send_message(
+                f"✅ <@{self.user_discord_id}>님이 **{destination}**에 정착 처리되었습니다. {role_change_msg}",
+                ephemeral=True
+            )
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(f"❌ 오류가 발생했습니다: {str(e)}", ephemeral=True)
+                else:
+                    await interaction.followup.send(f"❌ 오류가 발생했습니다: {str(e)}", ephemeral=True)
+            except:
+                pass
+
+
 class TravelUserControlView(ui.View):
     """유저용 여행 취소/종료 버튼 뷰 (DM에서 사용, 영구 View)"""
 

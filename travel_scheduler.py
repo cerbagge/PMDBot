@@ -96,7 +96,7 @@ def stop_travel_scheduler():
 
 @tasks.loop(hours=1)
 async def check_travel_status():
-    """매시간 여행 상태 체크"""
+    """매시간 여행 상태 체크 (알림 시간대: 당일 종료 → 오전 8시, 그 외 → 오후 8시)"""
     global _bot_instance
 
     if not _bot_instance:
@@ -107,7 +107,13 @@ async def check_travel_status():
         from database_manager import db_manager
         from config import config
 
-        print("[TRAVEL] 여행 상태 체크 시작...")
+        current_hour = datetime.now().hour
+
+        # 오전 8시 / 오후 8시가 아니면 스킵
+        if current_hour not in (8, 20):
+            return
+
+        print(f"[TRAVEL] 여행 상태 체크 시작... (현재 {current_hour}시)")
 
         guild_id = getattr(config, 'GUILD_ID', None)
         if not guild_id:
@@ -124,148 +130,86 @@ async def check_travel_status():
 
         today = date.today()
 
-        # 1. 오늘 시작하는 여행 활성화
-        starting_today = travel_manager.get_travels_starting_today()
-        for travel in starting_today:
-            travel_manager.activate_travel(travel['id'])
-            db_manager.set_user_traveling(travel['discord_id'], True)
-            print(f"[TRAVEL] 여행 활성화: {travel['id']} (유저: {travel['discord_id']})")
+        # ===== 오전 8시: 당일 종료 알림 =====
+        if current_hour == 8:
+            ending_soon = travel_manager.get_travels_ending_soon(days=1)
+            for travel in ending_soon:
+                if travel.get('notified_end'):
+                    continue
 
-            # 로그 채널에 알림
-            if log_channel:
-                embed = discord.Embed(
-                    title="🛫 여행 시작",
-                    description=f"<@{travel['discord_id']}>님의 여행이 시작되었습니다.",
-                    color=0x00ff00
-                )
-                embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
-                embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
-                embed.add_field(name="목적지", value=travel['destination_nation'], inline=True)
-                embed.add_field(name="기간", value=f"{travel['start_date']} ~ {travel['end_date']}", inline=False)
+                days_until = travel.get('days_until_end', 0)
 
-                await log_channel.send(embed=embed)
+                # 오늘 종료인 경우
+                if days_until == 0:
+                    travel_manager.mark_notified_end(travel['id'])
+                    print(f"[TRAVEL] 당일 알림: {travel['id']}")
 
-            # 신청자 DM 발송
-            dm_failed = False
-            try:
-                member = guild.get_member(travel['discord_id'])
-                if member:
-                    dm_embed = discord.Embed(
-                        title="🛫 여행이 시작되었습니다!",
-                        description=f"오늘부터 **{travel['destination_nation']}**로의 여행이 시작됩니다.\n"
-                                   f"여행 기간 동안 역할/닉네임 변동이 적용되지 않습니다.",
-                        color=0x00ff00
-                    )
-                    dm_embed.add_field(name="기간", value=f"{travel['start_date']} ~ {travel['end_date']}", inline=False)
-                    await member.send(embed=dm_embed)
-            except discord.Forbidden:
-                dm_failed = True
+                    # 로그 채널에 알림 (관리 역할 멘션)
+                    if log_channel:
+                        manager_roles = travel_config_manager.get_manager_roles()
+                        role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles])
 
-            # DM 실패 시 로그 채널에 알림
-            if dm_failed and log_channel:
-                manager_roles = travel_config_manager.get_manager_roles()
-                role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles]) if manager_roles else ""
+                        embed = discord.Embed(
+                            title="🔔 여행 종료일",
+                            description=f"<@{travel['discord_id']}>님의 여행이 **오늘** 종료됩니다.",
+                            color=0xe74c3c
+                        )
+                        embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
+                        embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
+                        embed.add_field(name="목적지", value=travel['destination_nation'], inline=True)
 
-                dm_fail_embed = discord.Embed(
-                    title="⚠️ DM 전송 실패",
-                    description=f"<@{travel['discord_id']}>님에게 여행 시작 알림을 전송할 수 없습니다.\n**DM이 차단되어 있습니다.**",
-                    color=0xff9900
-                )
-                dm_fail_embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
-                dm_fail_embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
-                await log_channel.send(content=role_mentions if role_mentions else None, embed=dm_fail_embed)
+                        content = role_mentions if role_mentions else None
+                        await log_channel.send(content=content, embed=embed)
 
-        # 2. 만료된 여행 처리
-        expired_travels = travel_manager.get_expired_travels()
-        for travel in expired_travels:
-            travel_manager.complete_travel(travel['id'])
-            db_manager.set_user_traveling(travel['discord_id'], False)
-            print(f"[TRAVEL] 여행 완료: {travel['id']} (유저: {travel['discord_id']})")
+                    # 신청자 DM 발송
+                    dm_failed = False
+                    try:
+                        member = guild.get_member(travel['discord_id'])
+                        if member:
+                            dm_embed = discord.Embed(
+                                title="🔔 여행 종료일 알림",
+                                description=f"**{travel['destination_nation']}**로의 여행이 **오늘** 종료됩니다.\n"
+                                           f"자정 이후부터 역할/닉네임 변동이 정상적으로 적용됩니다.",
+                                color=0xe74c3c
+                            )
+                            await member.send(embed=dm_embed)
+                    except discord.Forbidden:
+                        dm_failed = True
 
-            # 원래 국가 기반 역할 복원
-            try:
-                member = guild.get_member(travel['discord_id'])
-                if member and travel.get('original_nation'):
-                    await restore_travel_roles(member, travel, guild)
-            except Exception as e:
-                print(f"[TRAVEL] 역할 복원 오류: {e}")
+                    # DM 실패 시 로그 채널에 알림
+                    if dm_failed and log_channel:
+                        manager_roles = travel_config_manager.get_manager_roles()
+                        role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles]) if manager_roles else ""
 
-            # 로그 채널에 알림 (관리 역할 멘션)
-            if log_channel:
-                # 관리 역할 멘션 생성
-                manager_roles = travel_config_manager.get_manager_roles()
-                role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles])
+                        dm_fail_embed = discord.Embed(
+                            title="⚠️ DM 전송 실패",
+                            description=f"<@{travel['discord_id']}>님에게 여행 당일 알림을 전송할 수 없습니다.\n**DM이 차단되어 있습니다.**",
+                            color=0xff9900
+                        )
+                        dm_fail_embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
+                        dm_fail_embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
+                        await log_channel.send(content=role_mentions if role_mentions else None, embed=dm_fail_embed)
 
-                embed = discord.Embed(
-                    title="🛬 여행 종료",
-                    description=f"<@{travel['discord_id']}>님의 여행이 종료되었습니다.\n"
-                               f"이제부터 역할/닉네임 변동이 정상적으로 적용됩니다.",
-                    color=0xe74c3c
-                )
-                embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
-                embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
-                embed.add_field(name="목적지", value=travel['destination_nation'], inline=True)
-                embed.add_field(name="기간", value=f"{travel['start_date']} ~ {travel['end_date']}", inline=False)
-                if travel.get('original_nation'):
-                    embed.add_field(name="원래 국가", value=travel['original_nation'], inline=True)
-
-                content = role_mentions if role_mentions else None
-                await log_channel.send(content=content, embed=embed)
-
-            # 신청자 DM 발송
-            dm_failed = False
-            try:
-                member = guild.get_member(travel['discord_id'])
-                if member:
-                    dm_embed = discord.Embed(
-                        title="🛬 여행이 종료되었습니다!",
-                        description=f"**{travel['destination_nation']}**로의 여행이 종료되었습니다.\n"
-                                   f"이제부터 역할/닉네임 변동이 정상적으로 적용됩니다.",
-                        color=0xe74c3c
-                    )
-                    dm_embed.add_field(name="기간", value=f"{travel['start_date']} ~ {travel['end_date']}", inline=False)
-                    await member.send(embed=dm_embed)
-            except discord.Forbidden:
-                dm_failed = True
-
-            # DM 실패 시 로그 채널에 알림
-            if dm_failed and log_channel:
-                manager_roles = travel_config_manager.get_manager_roles()
-                role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles]) if manager_roles else ""
-
-                dm_fail_embed = discord.Embed(
-                    title="⚠️ DM 전송 실패",
-                    description=f"<@{travel['discord_id']}>님에게 여행 종료 알림을 전송할 수 없습니다.\n**DM이 차단되어 있습니다.**",
-                    color=0xff9900
-                )
-                dm_fail_embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
-                dm_fail_embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
-                await log_channel.send(content=role_mentions if role_mentions else None, embed=dm_fail_embed)
-
-        # 3. 1일 전 알림 (아직 알림 안 보낸 여행)
-        ending_soon = travel_manager.get_travels_ending_soon(days=1)
-        for travel in ending_soon:
-            if travel.get('notified_1day'):
-                continue
-
-            days_until = travel.get('days_until_end', 0)
-
-            # 정확히 1일 남은 경우만
-            if days_until == 1:
-                travel_manager.mark_notified_1day(travel['id'])
-                print(f"[TRAVEL] 1일 전 알림: {travel['id']}")
+        # ===== 오후 8시: 여행 시작/만료/1일 전 알림 =====
+        if current_hour == 20:
+            # 1. 오늘 시작하는 여행 활성화
+            starting_today = travel_manager.get_travels_starting_today()
+            for travel in starting_today:
+                travel_manager.activate_travel(travel['id'])
+                db_manager.set_user_traveling(travel['discord_id'], True)
+                print(f"[TRAVEL] 여행 활성화: {travel['id']} (유저: {travel['discord_id']})")
 
                 # 로그 채널에 알림
                 if log_channel:
                     embed = discord.Embed(
-                        title="⏰ 여행 종료 1일 전",
-                        description=f"<@{travel['discord_id']}>님의 여행이 **내일** 종료됩니다.",
-                        color=0xf39c12
+                        title="🛫 여행 시작",
+                        description=f"<@{travel['discord_id']}>님의 여행이 시작되었습니다.",
+                        color=0x00ff00
                     )
                     embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
                     embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
                     embed.add_field(name="목적지", value=travel['destination_nation'], inline=True)
-                    embed.add_field(name="종료일", value=travel['end_date'], inline=True)
+                    embed.add_field(name="기간", value=f"{travel['start_date']} ~ {travel['end_date']}", inline=False)
 
                     await log_channel.send(embed=embed)
 
@@ -275,12 +219,12 @@ async def check_travel_status():
                     member = guild.get_member(travel['discord_id'])
                     if member:
                         dm_embed = discord.Embed(
-                            title="⏰ 여행 종료 1일 전 알림",
-                            description=f"**{travel['destination_nation']}**로의 여행이 **내일** 종료됩니다.\n"
-                                       f"종료 후에는 역할/닉네임 변동이 정상적으로 적용됩니다.",
-                            color=0xf39c12
+                            title="🛫 여행이 시작되었습니다!",
+                            description=f"오늘부터 **{travel['destination_nation']}**로의 여행이 시작됩니다.\n"
+                                       f"여행 기간 동안 역할/닉네임 변동이 적용되지 않습니다.",
+                            color=0x00ff00
                         )
-                        dm_embed.add_field(name="종료일", value=travel['end_date'], inline=False)
+                        dm_embed.add_field(name="기간", value=f"{travel['start_date']} ~ {travel['end_date']}", inline=False)
                         await member.send(embed=dm_embed)
                 except discord.Forbidden:
                     dm_failed = True
@@ -292,72 +236,256 @@ async def check_travel_status():
 
                     dm_fail_embed = discord.Embed(
                         title="⚠️ DM 전송 실패",
-                        description=f"<@{travel['discord_id']}>님에게 여행 1일 전 알림을 전송할 수 없습니다.\n**DM이 차단되어 있습니다.**",
+                        description=f"<@{travel['discord_id']}>님에게 여행 시작 알림을 전송할 수 없습니다.\n**DM이 차단되어 있습니다.**",
                         color=0xff9900
                     )
                     dm_fail_embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
                     dm_fail_embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
                     await log_channel.send(content=role_mentions if role_mentions else None, embed=dm_fail_embed)
 
-        # 4. 당일 알림 (아직 종료 알림 안 보낸 여행 중 당일인 것)
-        for travel in ending_soon:
-            if travel.get('notified_end'):
-                continue
-
-            days_until = travel.get('days_until_end', 0)
-
-            # 오늘 종료인 경우
-            if days_until == 0:
-                travel_manager.mark_notified_end(travel['id'])
-                print(f"[TRAVEL] 당일 알림: {travel['id']}")
-
-                # 로그 채널에 알림 (관리 역할 멘션)
-                if log_channel:
-                    manager_roles = travel_config_manager.get_manager_roles()
-                    role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles])
-
-                    embed = discord.Embed(
-                        title="🔔 여행 종료일",
-                        description=f"<@{travel['discord_id']}>님의 여행이 **오늘** 종료됩니다.",
-                        color=0xe74c3c
-                    )
-                    embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
-                    embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
-                    embed.add_field(name="목적지", value=travel['destination_nation'], inline=True)
-
-                    content = role_mentions if role_mentions else None
-                    await log_channel.send(content=content, embed=embed)
-
-                # 신청자 DM 발송
-                dm_failed = False
+            # 2. 만료된 여행 처리
+            expired_travels = travel_manager.get_expired_travels()
+            for travel in expired_travels:
+                # 유저가 아직 여행 국가에 있는지 확인
+                still_in_destination = False
                 try:
-                    member = guild.get_member(travel['discord_id'])
-                    if member:
-                        dm_embed = discord.Embed(
-                            title="🔔 여행 종료일 알림",
-                            description=f"**{travel['destination_nation']}**로의 여행이 **오늘** 종료됩니다.\n"
-                                       f"자정 이후부터 역할/닉네임 변동이 정상적으로 적용됩니다.",
+                    from bulk_updater import bulk_data_manager
+                    resident = bulk_data_manager.get_resident_by_name(travel['minecraft_name'])
+                    if resident:
+                        current_nation = resident.get('nation', '')
+                        destination = travel.get('destination_nation', '')
+                        if current_nation and destination and current_nation.lower() == destination.lower():
+                            still_in_destination = True
+                            print(f"[TRAVEL] 미복귀 감지: {travel['id']} - {travel['minecraft_name']}이(가) 아직 {destination}에 있음")
+                except Exception as e:
+                    print(f"[TRAVEL] 현재 국가 확인 실패 ({travel['minecraft_name']}): {e}")
+
+                if still_in_destination:
+                    # === 미복귀 처리: 여행 상태 유지, 역할 복원 안 함, 관리자에게 연장/정착 버튼 제공 ===
+                    print(f"[TRAVEL] 미복귀 - 여행 상태 유지: {travel['id']} (유저: {travel['discord_id']})")
+
+                    # 중복 알림 방지
+                    if travel.get('notified_overstay'):
+                        continue
+
+                    # 미복귀 알림 플래그 설정
+                    travel_data = travel_manager.get_travel(travel['id'])
+                    if travel_data:
+                        travel_data['notified_overstay'] = True
+                        travel_manager._save_data()
+
+                    # 외국인 국내 여행인지 확인
+                    is_foreigner_travel = False
+                    try:
+                        _base = config.BASE_NATION
+                        if _base and travel.get('destination_nation', '').lower() == _base.lower():
+                            is_foreigner_travel = True
+                    except Exception:
+                        pass
+
+                    # 신청 채널의 원본 메시지에 연장/정착 버튼 추가
+                    request_channel_id = travel_config_manager.get_request_channel()
+                    if request_channel_id and travel.get('message_id'):
+                        try:
+                            request_channel = guild.get_channel(request_channel_id)
+                            if request_channel:
+                                original_msg = await request_channel.fetch_message(travel['message_id'])
+                                if original_msg:
+                                    updated_embed = original_msg.embeds[0] if original_msg.embeds else None
+                                    if updated_embed:
+                                        updated_embed.color = 0xff9900
+                                        updated_embed.title = "⚠️ 여행 종료 - 미복귀"
+                                        updated_embed.add_field(
+                                            name="미복귀 감지",
+                                            value=f"여행이 종료되었지만 아직 **{travel['destination_nation']}**에 있습니다.\n"
+                                                  f"아래 버튼으로 여행을 연장하거나 정착 처리해주세요.",
+                                            inline=False
+                                        )
+                                    from commands.user.travel.travel_request import TravelOverstayView
+                                    view = TravelOverstayView(travel['id'], travel['discord_id'])
+                                    await original_msg.edit(embed=updated_embed, view=view)
+                        except Exception as e:
+                            print(f"[TRAVEL] 신청 메시지 업데이트 실패 ({travel['id']}): {e}")
+
+                    # 로그 채널에 미복귀 알림 (관리 역할 멘션)
+                    if log_channel:
+                        manager_roles = travel_config_manager.get_manager_roles()
+                        role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles])
+
+                        embed = discord.Embed(
+                            title="⚠️ 여행 종료 - 미복귀",
+                            description=f"<@{travel['discord_id']}>님의 여행이 종료되었지만 아직 **{travel['destination_nation']}**에 있습니다.\n"
+                                       f"신청 채널에서 여행 연장 또는 정착 처리를 해주세요.",
+                            color=0xff9900
+                        )
+                        embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
+                        embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
+                        embed.add_field(name="목적지", value=travel['destination_nation'], inline=True)
+                        embed.add_field(name="기간", value=f"{travel['start_date']} ~ {travel['end_date']}", inline=False)
+                        if travel.get('original_nation'):
+                            embed.add_field(name="원래 국가", value=travel['original_nation'], inline=True)
+
+                        content = role_mentions if role_mentions else None
+                        await log_channel.send(content=content, embed=embed)
+
+                    # 신청자 DM 발송 (미복귀 안내)
+                    dm_failed = False
+                    try:
+                        member = guild.get_member(travel['discord_id'])
+                        if member:
+                            kick_warning = ""
+                            if is_foreigner_travel:
+                                kick_warning = "\n\n⚠️ **주의:** 여행 기간이 종료되었으므로 언제든지 `/t kick`을 통해 마을에서 추방될 수 있습니다."
+
+                            dm_embed = discord.Embed(
+                                title="⚠️ 여행이 종료되었습니다!",
+                                description=f"**{travel['destination_nation']}**로의 여행 기간이 종료되었습니다.\n"
+                                           f"현재 아직 **{travel['destination_nation']}**에 계신 것으로 확인됩니다.\n\n"
+                                           f"원래 국가로 복귀하시거나, 관리진에게 여행 연장 또는 정착을 요청해주세요.{kick_warning}",
+                                color=0xff9900
+                            )
+                            dm_embed.add_field(name="기간", value=f"{travel['start_date']} ~ {travel['end_date']}", inline=False)
+                            await member.send(embed=dm_embed)
+                    except discord.Forbidden:
+                        dm_failed = True
+
+                    # DM 실패 시 로그 채널에 알림
+                    if dm_failed and log_channel:
+                        manager_roles = travel_config_manager.get_manager_roles()
+                        role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles]) if manager_roles else ""
+
+                        dm_fail_embed = discord.Embed(
+                            title="⚠️ DM 전송 실패",
+                            description=f"<@{travel['discord_id']}>님에게 여행 미복귀 알림을 전송할 수 없습니다.\n**DM이 차단되어 있습니다.**",
+                            color=0xff9900
+                        )
+                        dm_fail_embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
+                        dm_fail_embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
+                        await log_channel.send(content=role_mentions if role_mentions else None, embed=dm_fail_embed)
+
+                else:
+                    # === 정상 복귀 처리: 여행 완료 처리 ===
+                    travel_manager.complete_travel(travel['id'])
+                    db_manager.set_user_traveling(travel['discord_id'], False)
+                    print(f"[TRAVEL] 여행 완료: {travel['id']} (유저: {travel['discord_id']})")
+
+                    # 원래 국가 기반 역할 복원
+                    try:
+                        member = guild.get_member(travel['discord_id'])
+                        if member and travel.get('original_nation'):
+                            await restore_travel_roles(member, travel, guild)
+                    except Exception as e:
+                        print(f"[TRAVEL] 역할 복원 오류: {e}")
+
+                    # 로그 채널에 알림 (관리 역할 멘션)
+                    if log_channel:
+                        manager_roles = travel_config_manager.get_manager_roles()
+                        role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles])
+
+                        embed = discord.Embed(
+                            title="🛬 여행 종료",
+                            description=f"<@{travel['discord_id']}>님의 여행이 종료되었습니다.\n"
+                                       f"이제부터 역할/닉네임 변동이 정상적으로 적용됩니다.",
                             color=0xe74c3c
                         )
-                        await member.send(embed=dm_embed)
-                except discord.Forbidden:
-                    dm_failed = True
+                        embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
+                        embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
+                        embed.add_field(name="목적지", value=travel['destination_nation'], inline=True)
+                        embed.add_field(name="기간", value=f"{travel['start_date']} ~ {travel['end_date']}", inline=False)
+                        if travel.get('original_nation'):
+                            embed.add_field(name="원래 국가", value=travel['original_nation'], inline=True)
 
-                # DM 실패 시 로그 채널에 알림
-                if dm_failed and log_channel:
-                    manager_roles = travel_config_manager.get_manager_roles()
-                    role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles]) if manager_roles else ""
+                        content = role_mentions if role_mentions else None
+                        await log_channel.send(content=content, embed=embed)
 
-                    dm_fail_embed = discord.Embed(
-                        title="⚠️ DM 전송 실패",
-                        description=f"<@{travel['discord_id']}>님에게 여행 당일 알림을 전송할 수 없습니다.\n**DM이 차단되어 있습니다.**",
-                        color=0xff9900
-                    )
-                    dm_fail_embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
-                    dm_fail_embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
-                    await log_channel.send(content=role_mentions if role_mentions else None, embed=dm_fail_embed)
+                    # 신청자 DM 발송
+                    dm_failed = False
+                    try:
+                        member = guild.get_member(travel['discord_id'])
+                        if member:
+                            dm_embed = discord.Embed(
+                                title="🛬 여행이 종료되었습니다!",
+                                description=f"**{travel['destination_nation']}**로의 여행이 종료되었습니다.\n"
+                                           f"이제부터 역할/닉네임 변동이 정상적으로 적용됩니다.",
+                                color=0xe74c3c
+                            )
+                            dm_embed.add_field(name="기간", value=f"{travel['start_date']} ~ {travel['end_date']}", inline=False)
+                            await member.send(embed=dm_embed)
+                    except discord.Forbidden:
+                        dm_failed = True
 
-        print("[TRAVEL] 여행 상태 체크 완료")
+                    # DM 실패 시 로그 채널에 알림
+                    if dm_failed and log_channel:
+                        manager_roles = travel_config_manager.get_manager_roles()
+                        role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles]) if manager_roles else ""
+
+                        dm_fail_embed = discord.Embed(
+                            title="⚠️ DM 전송 실패",
+                            description=f"<@{travel['discord_id']}>님에게 여행 종료 알림을 전송할 수 없습니다.\n**DM이 차단되어 있습니다.**",
+                            color=0xff9900
+                        )
+                        dm_fail_embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
+                        dm_fail_embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
+                        await log_channel.send(content=role_mentions if role_mentions else None, embed=dm_fail_embed)
+
+            # 3. 1일 전 알림 (아직 알림 안 보낸 여행)
+            ending_soon = travel_manager.get_travels_ending_soon(days=1)
+            for travel in ending_soon:
+                if travel.get('notified_1day'):
+                    continue
+
+                days_until = travel.get('days_until_end', 0)
+
+                # 정확히 1일 남은 경우만
+                if days_until == 1:
+                    travel_manager.mark_notified_1day(travel['id'])
+                    print(f"[TRAVEL] 1일 전 알림: {travel['id']}")
+
+                    # 로그 채널에 알림
+                    if log_channel:
+                        embed = discord.Embed(
+                            title="⏰ 여행 종료 1일 전",
+                            description=f"<@{travel['discord_id']}>님의 여행이 **내일** 종료됩니다.",
+                            color=0xf39c12
+                        )
+                        embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
+                        embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
+                        embed.add_field(name="목적지", value=travel['destination_nation'], inline=True)
+                        embed.add_field(name="종료일", value=travel['end_date'], inline=True)
+
+                        await log_channel.send(embed=embed)
+
+                    # 신청자 DM 발송
+                    dm_failed = False
+                    try:
+                        member = guild.get_member(travel['discord_id'])
+                        if member:
+                            dm_embed = discord.Embed(
+                                title="⏰ 여행 종료 1일 전 알림",
+                                description=f"**{travel['destination_nation']}**로의 여행이 **내일** 종료됩니다.\n"
+                                           f"종료 후에는 역할/닉네임 변동이 정상적으로 적용됩니다.",
+                                color=0xf39c12
+                            )
+                            dm_embed.add_field(name="종료일", value=travel['end_date'], inline=False)
+                            await member.send(embed=dm_embed)
+                    except discord.Forbidden:
+                        dm_failed = True
+
+                    # DM 실패 시 로그 채널에 알림
+                    if dm_failed and log_channel:
+                        manager_roles = travel_config_manager.get_manager_roles()
+                        role_mentions = " ".join([f"<@&{role_id}>" for role_id in manager_roles]) if manager_roles else ""
+
+                        dm_fail_embed = discord.Embed(
+                            title="⚠️ DM 전송 실패",
+                            description=f"<@{travel['discord_id']}>님에게 여행 1일 전 알림을 전송할 수 없습니다.\n**DM이 차단되어 있습니다.**",
+                            color=0xff9900
+                        )
+                        dm_fail_embed.add_field(name="신청 ID", value=f"`{travel['id']}`", inline=True)
+                        dm_fail_embed.add_field(name="마크 닉네임", value=travel['minecraft_name'], inline=True)
+                        await log_channel.send(content=role_mentions if role_mentions else None, embed=dm_fail_embed)
+
+        print(f"[TRAVEL] 여행 상태 체크 완료 ({current_hour}시)")
 
     except Exception as e:
         import traceback
